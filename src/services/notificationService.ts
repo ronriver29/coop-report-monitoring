@@ -1,6 +1,6 @@
-import { Notification } from '../models/Notification.ts';
-import User from '../models/User.ts';
-import { UserRole } from '../constants.ts';
+import { Notification } from '../models/Notification';
+import User from '../models/User';
+import { UserRole } from '../constants';
 
 export const createNotification = async (
   recipientId: string,

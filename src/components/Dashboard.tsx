@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, DashboardStats, UserRole } from '../types.ts';
+import { User, DashboardStats, UserRole } from '../types';
 import { 
   FileUp, BarChart3, Users, Clock, ShieldCheck, UserPlus, 
   Lock, Loader2, X, ShieldAlert, MapPin, LayoutDashboard,
@@ -10,8 +10,8 @@ import {
 } from 'lucide-react';
 import { FuturisticLoader } from './FuturisticLoader';
 import { motion, AnimatePresence } from 'motion/react';
-import { PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants.ts';
-import { apiRequest } from '../lib/api.ts';
+import { PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants';
+import { apiRequest } from '../lib/api';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface Props {

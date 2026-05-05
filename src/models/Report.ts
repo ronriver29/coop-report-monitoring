@@ -55,4 +55,5 @@ const ReportSchema: Schema = new Schema(
 ReportSchema.index({ cooperativeName: 'text', registrationNumber: 1 });
 ReportSchema.index({ submissionDate: -1 });
 
-export default mongoose.model<IReport>('Report', ReportSchema);
+const Report = mongoose.models.Report || mongoose.model<IReport>('Report', ReportSchema);
+export default Report;

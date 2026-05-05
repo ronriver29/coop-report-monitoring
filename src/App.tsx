@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, UserRole } from './types.ts';
+import { User, UserRole } from './types';
 import Dashboard from './components/Dashboard.tsx';
 import Login from './components/Login.tsx';
 import LoadingPage from './components/LoadingPage.tsx';

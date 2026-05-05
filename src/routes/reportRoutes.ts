@@ -1,13 +1,13 @@
 import express from 'express';
 import { parse } from 'csv-parse';
 import Papa from 'papaparse';
-import Report from '../models/Report.ts';
-import { AuditLog } from '../models/AuditLog.ts';
-import { protect, restrictTo } from '../middleware/auth.ts';
-import type { AuthRequest } from '../middleware/auth.ts';
-import { UserRole, PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants.ts';
-import { logAction } from '../services/auditService.ts';
-import { createNotification, notifyAdmins } from '../services/notificationService.ts';
+import Report from '../models/Report';
+import { AuditLog } from '../models/AuditLog';
+import { protect, restrictTo } from '../middleware/auth';
+import type { AuthRequest } from '../middleware/auth';
+import { UserRole, PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants';
+import { logAction } from '../services/auditService';
+import { createNotification, notifyAdmins } from '../services/notificationService';
 
 const router = express.Router();
 

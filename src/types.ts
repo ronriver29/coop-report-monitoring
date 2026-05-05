@@ -1,4 +1,4 @@
-import { UserRole } from './constants.ts';
+import { UserRole } from './constants';
 
 export { UserRole };
 

@@ -1,4 +1,4 @@
-import { AuditLog } from '../models/AuditLog.ts';
+import { AuditLog } from '../models/AuditLog';
 
 export const logAction = async (
   userId: string,

@@ -1,5 +1,4 @@
 import { connectDB } from '../src/config/db';
-import app from '../server';
 
 let isConnected = false;
 
@@ -31,7 +30,8 @@ export default async (req: any, res: any) => {
 
   // 3. Hand over to Express
   try {
-    return app(req, res);
+    const { default: expressApp } = await import('../server');
+    return expressApp(req, res);
   } catch (error: any) {
     console.error('[Vercel Handler] Express Execution Crash:', error);
     res.status(500).json({

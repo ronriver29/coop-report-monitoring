@@ -109,9 +109,14 @@ const swaggerOptions = {
     info: { title: 'CDA Cooperative Monitoring API', version: '1.0.0' },
     servers: [{ url: '/api' }],
   },
-  apis: ['./src/routes/*.ts'],
+  apis: ['./src/routes/*.{ts,js}', './src/routes/*.ts'],
 };
-const swaggerSpec = swaggerJsdoc(swaggerOptions);
+let swaggerSpec: any = {};
+try {
+  swaggerSpec = swaggerJsdoc(swaggerOptions);
+} catch (e) {
+  console.warn('Swagger documentation failed to initialize:', e);
+}
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // --- API Route Mounts ---

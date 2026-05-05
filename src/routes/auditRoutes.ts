@@ -1,8 +1,8 @@
 import express from 'express';
-import { AuditLog } from '../models/AuditLog.ts';
-import { protect, restrictTo } from '../middleware/auth.ts';
-import type { AuthRequest } from '../middleware/auth.ts';
-import { UserRole } from '../constants.ts';
+import { AuditLog } from '../models/AuditLog';
+import { protect, restrictTo } from '../middleware/auth';
+import type { AuthRequest } from '../middleware/auth';
+import { UserRole } from '../constants';
 
 const router = express.Router();
 
