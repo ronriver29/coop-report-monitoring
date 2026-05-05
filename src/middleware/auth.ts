@@ -1,8 +1,8 @@
 import express from 'express';
 import jwt from 'jsonwebtoken';
-import User from '../models/User.ts';
-import type { IUser } from '../models/User.ts';
-import { UserRole } from '../constants.ts';
+import User from '../models/User';
+import type { IUser } from '../models/User';
+import { UserRole } from '../constants';
 
 export interface AuthRequest extends express.Request {
   user?: IUser;

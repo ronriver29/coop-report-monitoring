@@ -1,5 +1,5 @@
 import mongoose, { Schema, Document } from 'mongoose';
-import { UserRole } from '../constants.ts';
+import { UserRole } from '../constants';
 
 export interface IUser extends Document {
   googleId?: string;

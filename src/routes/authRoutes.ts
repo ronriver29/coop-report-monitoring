@@ -2,11 +2,11 @@ import express from 'express';
 import passport from 'passport';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
-import { generateToken, protect, restrictTo } from '../middleware/auth.ts';
-import User from '../models/User.ts';
-import { UserRole } from '../constants.ts';
-import { sendWelcomeEmail } from '../services/emailService.ts';
-import { logAction } from '../services/auditService.ts';
+import { generateToken, protect, restrictTo } from '../middleware/auth';
+import User from '../models/User';
+import { UserRole } from '../constants';
+import { sendWelcomeEmail } from '../services/emailService';
+import { logAction } from '../services/auditService';
 
 const router = express.Router();
 
