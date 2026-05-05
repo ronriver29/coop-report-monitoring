@@ -21,10 +21,14 @@ export default async (req: any, res: any) => {
   // 2. Ensure DB Connection
   try {
     const conn = await connectDB();
-    const isConnected = conn?.readyState === mongoose.ConnectionStates.connected;
-    console.log('[Vercel Handler] DB Connection state:', isConnected ? 'CONNECTED' : 'NOT CONNECTED');
+    const dbConnected = conn?.readyState === 1;
+    console.log('[Vercel Handler] DB Connection state:', dbConnected ? 'CONNECTED' : 'NOT CONNECTED');
+    if (!dbConnected) {
+      console.warn('[Vercel Handler] DB is not in connected state, attempting to proceed anyway.');
+    }
   } catch (dbError: any) {
     console.error('[Vercel Handler] Database connection attempt failed:', dbError.message);
+    // Continue despite DB error to let Express handle potential recovery or show its own error UI
   }
 
   // 3. Hand over to Express

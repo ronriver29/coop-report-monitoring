@@ -769,8 +769,20 @@ export default function Dashboard({ user, token, onLogout }: Props) {
           throw new Error('Server returned HTML instead of JSON. This likely means the API route was not found and it fell through to the SPA entry point.');
         }
       } else {
-        const data = await res.json().catch(() => ({ message: 'Unknown error' }));
-        throw new Error(data.message || 'Failed to fetch reports');
+        let errorMessage = 'Failed to fetch reports';
+        try {
+          const data = await res.json();
+          errorMessage = data.message || errorMessage;
+        } catch (jsonErr) {
+          // If not JSON, it's likely HTML error page
+          const text = await res.text();
+          if (text.includes('<!DOCTYPE html>')) {
+            errorMessage = 'Server error (HTML received). Check logs.';
+          } else {
+            errorMessage = text.substring(0, 100);
+          }
+        }
+        throw new Error(errorMessage);
       }
     } catch (err: any) {
       if (err.message !== 'Session expired') {

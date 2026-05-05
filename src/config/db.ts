@@ -8,32 +8,36 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/cda_mo
 let isConnected = false;
 
 export const connectDB = async () => {
-  if (mongoose.connection.readyState === mongoose.ConnectionStates.connected || mongoose.connection.readyState === mongoose.ConnectionStates.connecting) {
+  const readyState = mongoose.connection.readyState;
+  if (readyState === 1 || readyState === 2) {
     return mongoose.connection;
   }
 
   try {
+    console.log('[DB] Attempting to connect to MongoDB...');
     await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
       connectTimeoutMS: 10000,
     });
     isConnected = true;
-    console.log('MongoDB Connected to:', mongoose.connection.host);
+    console.log('[DB] MongoDB Connected successfully');
 
     // Only drop index on true connection establishment
-    if ((mongoose.connection.readyState as any) === mongoose.ConnectionStates.connected) {
+    if (mongoose.connection.readyState === 1) {
       try {
-        const User = mongoose.connection.collection('users');
-        await User.dropIndex('googleId_1');
-        console.log('Dropped legacy googleId index for sparse recreation');
+        const usersCollection = mongoose.connection.collection('users');
+        if (usersCollection) {
+          await usersCollection.dropIndex('googleId_1');
+          console.log('[DB] Dropped legacy googleId index');
+        }
       } catch (e) {
         // Safe to ignore if index doesn't exist
       }
     }
     return mongoose.connection;
-  } catch (err) {
-    console.error('❌ MongoDB Connection Error:', err);
-    console.warn('⚠️ Server starting without active database connection. Some features may fail.');
-    // Do not process.exit(1) to allow the app to stay "Running" and potentially recover or show error UI
+  } catch (err: any) {
+    console.error('❌ MongoDB Connection Error:', err.message || err);
+    console.warn('⚠️ Server starting without active database connection.');
+    throw err; // Throwing so the caller knows it failed
   }
 };
