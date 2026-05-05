@@ -1,0 +1,6 @@
+{
+  "name": "CDA Report Monitoring",
+  "description": "Secure governance portal for the Cooperative Development Authority to monitor reports and compliance via CSV ingestion and role-based analytics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
