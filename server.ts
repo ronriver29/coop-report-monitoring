@@ -29,14 +29,14 @@ import settingsRoutes from './src/routes/settingsRoutes.ts';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const app = express();
+const PORT = 3000;
+
 async function startServer() {
   await connectDB();
   
   // Verify email configuration non-blocking
   verifyEmailConfig().catch(err => console.error('Background Email Check Failed:', err));
-
-  const app = express();
-  const PORT = 3000;
 
   // Trust proxy for correct IP identification behind Cloud Run/Nginx
   // This is CRITICAL for Secure: true cookies and Google OAuth
@@ -220,10 +220,15 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server running on http://localhost:${PORT}`);
-    console.log(`📄 Swagger docs at http://localhost:${PORT}/api-docs`);
-  });
+  // Only start listening if NOT on Vercel (where vercel.json handles routing)
+  if (process.env.VERCEL !== '1') {
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`🚀 Server running on http://localhost:${PORT}`);
+      console.log(`📄 Swagger docs at http://localhost:${PORT}/api-docs`);
+    });
+  }
 }
 
 startServer();
+
+export default app;
