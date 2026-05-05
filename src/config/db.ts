@@ -8,17 +8,17 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/cda_mo
 let isConnected = false;
 
 export const connectDB = async () => {
-  if (isConnected && mongoose.connection.readyState === 1) {
-    return;
+  if (mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) {
+    return mongoose.connection;
   }
 
   try {
-    const db = await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000, // Keep it short for serverless
+    const conn = await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 5000,
       connectTimeoutMS: 10000,
     });
     isConnected = true;
-    console.log('MongoDB Connected successfully');
+    console.log('MongoDB Connected to:', mongoose.connection.host);
 
     // Only drop index on true connection establishment, and not in every serverless hit if possible
     if (mongoose.connection.readyState === 1) {

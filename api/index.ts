@@ -1,4 +1,5 @@
 import { connectDB } from '../src/config/db';
+import expressApp from '../server';
 
 let isConnected = false;
 
@@ -12,31 +13,31 @@ export default async (req: any, res: any) => {
     });
   }
 
-  // 1. Log request for Vercel logs visibility
-  console.log(`[Vercel Handler] ${req.method} ${req.url}`);
+  // 1. Log request details
+  console.log(`[Vercel Handler] ${req.method} ${req.url} (Path: ${req.path || 'n/a'})`);
 
-  // 2. Ensure DB Connection (Singleton style)
-  if (!isConnected) {
-    try {
-      await connectDB();
-      isConnected = true;
-      console.log('[Vercel Handler] Database connected successfully');
-    } catch (dbError: any) {
-      console.error('[Vercel Handler] Database Connection Error:', dbError);
-      // We don't return early here to let Express handle the response, 
-      // but the app will likely fail on DB queries.
-    }
+  // 2. Ensure DB Connection
+  try {
+    await connectDB();
+  } catch (dbError: any) {
+    console.error('[Vercel Handler] Database connection attempt failed:', dbError.message);
   }
 
   // 3. Hand over to Express
   try {
-    const { default: expressApp } = await import('../server');
+    if (typeof expressApp !== 'function') {
+      console.error('[Vercel Handler] Express App is not a function:', typeof expressApp);
+      throw new Error('Express app failed to initialize correctly.');
+    }
+    
     return expressApp(req, res);
   } catch (error: any) {
-    console.error('[Vercel Handler] Express Execution Crash:', error);
-    res.status(500).json({
-      message: 'Serverless Function Execution Failed',
-      error: error.message || 'Unknown Error'
+    console.error('[Vercel Handler] FATAL ERROR:', error);
+    res.setHeader('Content-Type', 'application/json');
+    return res.status(500).json({
+      message: 'The Application Server encountered a fatal error during execution.',
+      error: error.message || 'Unknown Execution Error',
+      path: req.url
     });
   }
 };

@@ -53,8 +53,12 @@ router.post('/login', async (req, res) => {
         mustChangePassword: user.mustChangePassword
       }
     });
-  } catch (error) {
-    res.status(500).json({ message: 'Server error' });
+  } catch (error: any) {
+    console.error('Login Route Error:', error);
+    res.status(500).json({ 
+      message: 'Authentication failed due to a server error',
+      error: error.message 
+    });
   }
 });
 

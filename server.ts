@@ -138,9 +138,27 @@ app.get('/api/notifications', protect, async (req: any, res) => {
   }
 });
 
-// Standard 404 for undefined API routes
+// standard 404 for undefined API routes
 app.use('/api', (req, res) => {
   res.status(404).json({ message: `API Endpoint ${req.originalUrl} not found` });
+});
+
+// --- GLOBAL ERROR HANDLER ---
+app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  console.error('[Global Error Handler]', err);
+  
+  // If headers already sent, pass to next default handler
+  if (res.headersSent) {
+    return next(err);
+  }
+
+  const statusCode = err.status || err.statusCode || 500;
+  res.status(statusCode).json({
+    message: err.message || 'Internal Server Error',
+    error: process.env.NODE_ENV === 'development' ? err : undefined,
+    path: req.url,
+    method: req.method
+  });
 });
 
 // Serve frontend assets
