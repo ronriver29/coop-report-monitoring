@@ -1,6 +1,17 @@
-import mongoose from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 
-const auditLogSchema = new mongoose.Schema({
+export interface IAuditLog extends Document {
+  action: string;
+  details: string;
+  user: mongoose.Types.ObjectId;
+  targetType: 'USER' | 'REPORT' | 'SYSTEM';
+  targetId?: string;
+  timestamp: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const auditLogSchema = new Schema({
   action: {
     type: String,
     required: true,
@@ -10,7 +21,7 @@ const auditLogSchema = new mongoose.Schema({
     required: true,
   },
   user: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: Schema.Types.ObjectId,
     ref: 'User',
     required: true,
   },
@@ -28,5 +39,6 @@ const auditLogSchema = new mongoose.Schema({
   },
 }, { timestamps: true });
 
-const AuditLog = mongoose.models.AuditLog || mongoose.model('AuditLog', auditLogSchema);
+const AuditLog: Model<IAuditLog> = mongoose.models.AuditLog || mongoose.model<IAuditLog>('AuditLog', auditLogSchema);
 export { AuditLog };
+export default AuditLog;

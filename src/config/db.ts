@@ -8,20 +8,20 @@ const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/cda_mo
 let isConnected = false;
 
 export const connectDB = async () => {
-  if (mongoose.connection.readyState === 1 || mongoose.connection.readyState === 2) {
+  if (mongoose.connection.readyState === mongoose.ConnectionStates.connected || mongoose.connection.readyState === mongoose.ConnectionStates.connecting) {
     return mongoose.connection;
   }
 
   try {
-    const conn = await mongoose.connect(MONGODB_URI, {
+    await mongoose.connect(MONGODB_URI, {
       serverSelectionTimeoutMS: 5000,
       connectTimeoutMS: 10000,
     });
     isConnected = true;
     console.log('MongoDB Connected to:', mongoose.connection.host);
 
-    // Only drop index on true connection establishment, and not in every serverless hit if possible
-    if (mongoose.connection.readyState === 1) {
+    // Only drop index on true connection establishment
+    if ((mongoose.connection.readyState as any) === mongoose.ConnectionStates.connected) {
       try {
         const User = mongoose.connection.collection('users');
         await User.dropIndex('googleId_1');
@@ -30,7 +30,7 @@ export const connectDB = async () => {
         // Safe to ignore if index doesn't exist
       }
     }
-    return db;
+    return mongoose.connection;
   } catch (err) {
     console.error('❌ MongoDB Connection Error:', err);
     console.warn('⚠️ Server starting without active database connection. Some features may fail.');

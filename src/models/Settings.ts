@@ -1,4 +1,4 @@
-import mongoose from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export const SettingCategory = {
   GENERAL: 'GENERAL',
@@ -9,14 +9,24 @@ export const SettingCategory = {
 
 export type SettingCategory = typeof SettingCategory[keyof typeof SettingCategory];
 
-const settingsSchema = new mongoose.Schema({
+export interface ISettings extends Document {
+  key: string;
+  value: any;
+  category: SettingCategory;
+  description?: string;
+  updatedBy?: mongoose.Types.ObjectId;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const settingsSchema = new Schema({
   key: {
     type: String,
     required: true,
     unique: true
   },
   value: {
-    type: mongoose.Schema.Types.Mixed,
+    type: Schema.Types.Mixed,
     required: true
   },
   category: {
@@ -26,10 +36,11 @@ const settingsSchema = new mongoose.Schema({
   },
   description: String,
   updatedBy: {
-    type: mongoose.Schema.Types.ObjectId,
+    type: Schema.Types.ObjectId,
     ref: 'User'
   }
 }, { timestamps: true });
 
-const Settings = mongoose.models.Settings || mongoose.model('Settings', settingsSchema);
+const Settings: Model<ISettings> = mongoose.models.Settings || mongoose.model<ISettings>('Settings', settingsSchema);
 export { Settings };
+export default Settings;

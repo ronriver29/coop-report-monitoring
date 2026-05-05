@@ -1,4 +1,4 @@
-import mongoose, { Schema, Document } from 'mongoose';
+import mongoose, { Schema, Document, Model } from 'mongoose';
 
 export interface IReport extends Document {
   cooperativeName: string;
@@ -55,5 +55,5 @@ const ReportSchema: Schema = new Schema(
 ReportSchema.index({ cooperativeName: 'text', registrationNumber: 1 });
 ReportSchema.index({ submissionDate: -1 });
 
-const Report = mongoose.models.Report || mongoose.model<IReport>('Report', ReportSchema);
+const Report: Model<IReport> = mongoose.models.Report || mongoose.model<IReport>('Report', ReportSchema);
 export default Report;
