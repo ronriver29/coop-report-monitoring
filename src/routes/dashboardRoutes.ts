@@ -1,8 +1,8 @@
 import express from 'express';
-import Report from '../models/Report';
-import { protect } from '../middleware/auth';
-import type { AuthRequest } from '../middleware/auth';
-import { UserRole, PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants';
+import Report from '../models/Report.ts';
+import { protect } from '../middleware/auth.ts';
+import type { AuthRequest } from '../middleware/auth.ts';
+import { UserRole, PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants.ts';
 
 const router = express.Router();
 

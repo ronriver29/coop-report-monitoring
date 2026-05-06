@@ -14,17 +14,17 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { createServer as createViteServer } from 'vite';
-import { connectDB } from './src/config/db';
-import './src/config/passport';
-import { protect } from './src/middleware/auth';
-import { verifyEmailConfig } from './src/services/emailService';
+import { connectDB } from './src/config/db.ts';
+import './src/config/passport.ts';
+import { protect } from './src/middleware/auth.ts';
+import { verifyEmailConfig } from './src/services/emailService.ts';
 
 // Routes
-import authRoutes from './src/routes/authRoutes';
-import reportRoutes from './src/routes/reportRoutes';
-import dashboardRoutes from './src/routes/dashboardRoutes';
-import auditRoutes from './src/routes/auditRoutes';
-import settingsRoutes from './src/routes/settingsRoutes';
+import authRoutes from './src/routes/authRoutes.ts';
+import reportRoutes from './src/routes/reportRoutes.ts';
+import dashboardRoutes from './src/routes/dashboardRoutes.ts';
+import auditRoutes from './src/routes/auditRoutes.ts';
+import settingsRoutes from './src/routes/settingsRoutes.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -129,7 +129,7 @@ app.use('/api/settings', settingsRoutes);
 // Shared Notifications
 app.get('/api/notifications', protect, async (req: any, res) => {
   try {
-    const { Notification } = await import('./src/models/Notification');
+    const { Notification } = await import('./src/models/Notification.ts');
     const notifications = await Notification.find({ recipient: req.user!._id }).sort({ timestamp: -1 }).limit(50);
     const unreadCount = await Notification.countDocuments({ recipient: req.user!._id, isRead: false });
     res.json({ notifications, unreadCount });

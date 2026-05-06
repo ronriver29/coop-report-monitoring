@@ -1,9 +1,9 @@
 import express from 'express';
-import { Settings, SettingCategory } from '../models/Settings';
-import { protect, restrictTo } from '../middleware/auth';
-import type { AuthRequest } from '../middleware/auth';
-import { UserRole } from '../constants';
-import { logAction } from '../services/auditService';
+import { Settings, SettingCategory } from '../models/Settings.ts';
+import { protect, restrictTo } from '../middleware/auth.ts';
+import type { AuthRequest } from '../middleware/auth.ts';
+import { UserRole } from '../constants.ts';
+import { logAction } from '../services/auditService.ts';
 
 const router = express.Router();
 

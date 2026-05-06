@@ -1,5 +1,9 @@
 export const apiRequest = async (url: string, options: RequestInit = {}) => {
   const token = localStorage.getItem('cda_token');
+  const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
+  
+  // Ensure we don't double slash if url starts with /
+  const fullUrl = url.startsWith('http') ? url : `${baseUrl.replace(/\/$/, '')}/${url.replace(/^\//, '')}`;
   
   const headers = {
     ...options.headers,
@@ -7,7 +11,7 @@ export const apiRequest = async (url: string, options: RequestInit = {}) => {
   };
 
   try {
-    const response = await fetch(url, { ...options, headers });
+    const response = await fetch(fullUrl, { ...options, headers });
 
     if (!response.ok) {
       console.warn(`API Request to ${url} failed with status ${response.status}`);
@@ -17,7 +21,8 @@ export const apiRequest = async (url: string, options: RequestInit = {}) => {
       // Clear credentials and reload to force login redirect
       localStorage.removeItem('cda_token');
       localStorage.removeItem('cda_user');
-      window.location.href = '/?expired=true';
+      const base = import.meta.env.BASE_URL || '/';
+      window.location.href = `${base}${base.endsWith('/') ? '' : '/'}?expired=true`;
       throw new Error('Session expired');
     }
 

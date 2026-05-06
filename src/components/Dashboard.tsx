@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, DashboardStats, UserRole } from '../types';
+import { User, DashboardStats, UserRole } from '../types.ts';
 import { 
   FileUp, BarChart3, Users, Clock, ShieldCheck, UserPlus, 
   Lock, Loader2, X, ShieldAlert, MapPin, LayoutDashboard,
@@ -8,10 +8,10 @@ import {
   UserMinus, UserCheck, Edit2, Bell, Copy, RefreshCw, Search,
   Menu, Sun, Moon, Download
 } from 'lucide-react';
-import { FuturisticLoader } from './FuturisticLoader';
+import { FuturisticLoader } from './FuturisticLoader.tsx';
 import { motion, AnimatePresence } from 'motion/react';
-import { PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants';
-import { apiRequest } from '../lib/api';
+import { PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants.ts';
+import { apiRequest } from '../lib/api.ts';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
 interface Props {
@@ -68,6 +68,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   const [createdUserTempPass, setCreatedUserTempPass] = useState<{ email: string, pass: string } | null>(null);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<User | null>(null);
+  const [showUpdateConfirm, setShowUpdateConfirm] = useState(false);
   const [editFormData, setEditFormData] = useState({ displayName: '', role: UserRole.ANALYST, region: '' });
 
   const [reports, setReports] = useState<any[]>([]);
@@ -257,8 +258,13 @@ export default function Dashboard({ user, token, onLogout }: Props) {
     }
   };
 
-  const handleUpdateUserDetails = async (e: React.FormEvent) => {
+  const handleUpdateUserDetails = (e: React.FormEvent) => {
     e.preventDefault();
+    if (!editingUser) return;
+    setShowUpdateConfirm(true);
+  };
+
+  const confirmUpdateDetails = async () => {
     if (!editingUser) return;
     
     setUserActionLoading(true);
@@ -275,6 +281,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
       if (res.ok) {
         setUploadMessage({ type: 'success', text: data.message });
         setEditingUser(null);
+        setShowUpdateConfirm(false);
         fetchUsers();
       } else {
         setUploadMessage({ type: 'error', text: data.message });
@@ -696,35 +703,6 @@ export default function Dashboard({ user, token, onLogout }: Props) {
         }
         setIsAddingUser(false);
         setNewUser({ email: '', displayName: '', role: UserRole.ANALYST, region: user?.region || '' });
-        fetchUsers();
-      } else {
-        setUploadMessage({ type: 'error', text: data.message });
-      }
-    } catch (err) {
-      setUploadMessage({ type: 'error', text: 'Network error or session expired' });
-    } finally {
-      setUserActionLoading(false);
-    }
-  };
-
-  const handleUpdateUser = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!editingUser) return;
-    
-    setUserActionLoading(true);
-    try {
-      const res = await apiRequest(`/api/auth/users/${editingUser._id}/role`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(editFormData)
-      });
-      
-      const data = await res.json();
-      if (res.ok) {
-        setUploadMessage({ type: 'success', text: data.message });
-        setEditingUser(null);
         fetchUsers();
       } else {
         setUploadMessage({ type: 'error', text: data.message });
@@ -2392,6 +2370,46 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                </button>
             </div>
           </form>
+        </motion.div>
+      </div>
+    )}
+  </AnimatePresence>
+
+  <AnimatePresence>
+    {showUpdateConfirm && editingUser && (
+      <div className="fixed inset-0 bg-[#0F172A]/90 z-[80] flex items-center justify-center p-4 backdrop-blur-md">
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.9 }}
+          className="bg-[var(--card)] border border-blue-500/20 rounded-3xl shadow-2xl max-w-sm w-full p-8 text-center transition-colors"
+        >
+          <div className="w-16 h-16 bg-blue-50 dark:bg-blue-900/30 rounded-full flex items-center justify-center text-blue-600 dark:text-blue-400 mx-auto mb-6 transition-colors">
+            <ShieldCheck size={32} />
+          </div>
+          <h3 className="text-xl font-bold text-[var(--text-main)] mb-2">Confirm Authorization Change?</h3>
+          <p className="text-[var(--text-muted)] text-sm mb-8 leading-relaxed">
+            You are about to update the access levels for <span className="font-bold text-[var(--text-main)]">{editingUser.displayName} ({editingUser.email})</span>.
+            <br />
+            <span className="block mt-2 font-mono text-[10px] bg-[var(--bg)] p-2 rounded-lg border border-[var(--border)] overflow-hidden text-ellipsis italic">
+              New assignment: {editFormData.role} in {editFormData.region || 'National Headquarters'}
+            </span>
+          </p>
+          <div className="flex gap-4">
+            <button 
+              onClick={() => setShowUpdateConfirm(false)}
+              className="flex-1 px-6 py-3 border border-[var(--border)] text-[var(--text-muted)] rounded-xl font-bold text-sm hover:bg-[var(--bg)] transition-colors"
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={confirmUpdateDetails}
+              disabled={userActionLoading}
+              className="flex-1 bg-blue-600 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-lg shadow-blue-600/20 flex items-center justify-center gap-2"
+            >
+              {userActionLoading ? <FuturisticLoader size={18} text="" /> : 'Confirm Change'}
+            </button>
+          </div>
         </motion.div>
       </div>
     )}

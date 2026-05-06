@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldAlert, Fingerprint, Mail, Lock, Loader2, ArrowRight, ShieldCheck, Clock } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { apiRequest } from '../lib/api.ts';
 
 interface Props {
   onLoginSuccess: (token: string, user: any) => void;
@@ -17,7 +18,7 @@ export default function Login({ onLoginSuccess }: Props) {
 
   const handleGoogleLogin = async () => {
     try {
-      const response = await fetch('/api/auth/google/url');
+      const response = await apiRequest('/api/auth/google/url');
       const data = await response.json();
       
       if (!response.ok) {
@@ -48,7 +49,7 @@ export default function Login({ onLoginSuccess }: Props) {
     setError(null);
 
     try {
-      const response = await fetch('/api/auth/login', {
+      const response = await apiRequest('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),

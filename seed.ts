@@ -1,8 +1,8 @@
 import mongoose from 'mongoose';
 import bcrypt from 'bcryptjs';
-import { connectDB } from './src/config/db';
-import User from './src/models/User';
-import { UserRole } from './src/constants';
+import { connectDB } from './src/config/db.ts';
+import User from './src/models/User.ts';
+import { UserRole } from './src/constants.ts';
 import dotenv from 'dotenv';
 
 dotenv.config();

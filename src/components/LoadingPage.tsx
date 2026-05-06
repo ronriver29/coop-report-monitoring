@@ -1,6 +1,6 @@
 import React from 'react';
 import { motion } from 'motion/react';
-import { FuturisticLoader } from './FuturisticLoader';
+import { FuturisticLoader } from './FuturisticLoader.tsx';
 
 export default function LoadingPage() {
   return (

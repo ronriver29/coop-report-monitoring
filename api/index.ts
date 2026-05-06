@@ -1,6 +1,6 @@
 import mongoose from 'mongoose';
-import { connectDB } from '../src/config/db';
-import expressApp from '../server';
+import { connectDB } from '../src/config/db.ts';
+import expressApp from '../server.ts';
 
 let isConnected = false;
 

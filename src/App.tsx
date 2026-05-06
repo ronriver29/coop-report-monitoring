@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { User, UserRole } from './types';
+import { User, UserRole } from './types.ts';
 import Dashboard from './components/Dashboard.tsx';
 import Login from './components/Login.tsx';
 import LoadingPage from './components/LoadingPage.tsx';
 import { motion, AnimatePresence } from 'motion/react';
+import { apiRequest } from './lib/api.ts';
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
@@ -20,14 +21,15 @@ export default function App() {
       localStorage.setItem('cda_token', urlToken);
       setToken(urlToken);
       // Clean URL
-      window.history.replaceState({}, document.title, "/");
+      const base = import.meta.env.BASE_URL || '/';
+      window.history.replaceState({}, document.title, base);
     }
 
     // Handle message from popup
     const handleMessage = (event: MessageEvent) => {
-      // Validate origin is from AI Studio preview or localhost
+      // Validate origin is from AI Studio preview, localhost, or GitHub Pages
       const origin = event.origin;
-      if (!origin.endsWith('.run.app') && !origin.includes('localhost')) {
+      if (!origin.endsWith('.run.app') && !origin.includes('localhost') && !origin.endsWith('github.io')) {
         return;
       }
 
@@ -48,9 +50,7 @@ export default function App() {
       } else {
         // Fetch from server if we have token but no user
         try {
-          const res = await fetch('/api/auth/me', {
-            headers: { 'Authorization': `Bearer ${token}` }
-          });
+          const res = await apiRequest('/api/auth/me');
           if (res.ok) {
             const data = await res.json();
             setUser(data.user);
