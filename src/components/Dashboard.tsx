@@ -1,18 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { User, DashboardStats, UserRole } from '../types.ts';
+import { GoogleGenAI } from "@google/genai";
 import { 
   FileUp, BarChart3, Users, Clock, ShieldCheck, UserPlus, 
   Lock, Loader2, X, ShieldAlert, MapPin, LayoutDashboard,
   FileText, History, Settings, LogOut, Terminal, 
   CheckCircle2, AlertTriangle, Shield, Eye, Trash2, 
-  UserMinus, UserCheck, Edit2, Bell, Copy, RefreshCw, Search,
-  Menu, Sun, Moon, Download
+  UserMinus, UserCheck, Edit2, Bell, Copy, RefreshCw, Search, Layers,
+  Menu, Sun, Moon, Download, Wrench, Layout, Filter, Check, Plus,
+  Sparkles, Wand2
 } from 'lucide-react';
 import { FuturisticLoader } from './FuturisticLoader.tsx';
 import { motion, AnimatePresence } from 'motion/react';
-import { PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants.ts';
+import { PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES, COOPERATIVE_CLUSTERS, ALL_COOP_TYPES } from '../constants.ts';
 import { apiRequest } from '../lib/api.ts';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+
+import { generateSummaryReport, generateEvaluationReport, generateCustomReport } from '../services/reportService.ts';
 
 interface Props {
   user: User | null;
@@ -21,7 +25,10 @@ interface Props {
 }
 
 export default function Dashboard({ user, token, onLogout }: Props) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'users' | 'ingest' | 'audit' | 'settings'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'users' | 'ingest' | 'audit' | 'settings' | 'builder'>('dashboard');
+  const [analysisData, setAnalysisData] = useState<{complianceStats: any[], regionStats: any[]} | null>(null);
+  const [isAnalysisLoading, setIsAnalysisLoading] = useState(false);
+  const [selectedBuilderFields, setSelectedBuilderFields] = useState<string[]>(['cooperativeName', 'registrationNumber', 'region', 'status', 'complianceStatus']);
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [uploadLoading, setUploadLoading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
@@ -50,6 +57,26 @@ export default function Dashboard({ user, token, onLogout }: Props) {
     status: ''
   });
   const [autoMappedFields, setAutoMappedFields] = useState<Set<string>>(new Set());
+
+  const [isAddingCoop, setIsAddingCoop] = useState(false);
+  const [showSecondaryType, setShowSecondaryType] = useState(false);
+  const [newCoop, setNewCoop] = useState({
+    cooperativeName: '',
+    registrationNumber: '',
+    cooperativeType: '',
+    secondaryCooperativeType: '',
+    specificType: '',
+    cooperativeCluster: '',
+    secondaryCooperativeCluster: '',
+    region: user?.region || '',
+    province: '',
+    municipality: '',
+    street: '',
+    category: '',
+    assetSize2025: '',
+    assetSize2026: '',
+    status: 'Complied'
+  });
 
   const [showPasswordChange, setShowPasswordChange] = useState(user?.mustChangePassword || false);
   const [newPassword, setNewPassword] = useState('');
@@ -84,6 +111,8 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   const [reportRegionFilter, setReportRegionFilter] = useState('');
   const [reportProvinceFilter, setReportProvinceFilter] = useState('');
   const [reportCooperativeTypeFilter, setReportCooperativeTypeFilter] = useState('');
+  const [reportCooperativeClusterFilter, setReportCooperativeClusterFilter] = useState('');
+  const [isSyncingClusters, setIsSyncingClusters] = useState(false);
   const [reportSortBy, setReportSortBy] = useState('createdAt');
   const [reportSortOrder, setReportSortOrder] = useState<'asc' | 'desc'>('desc');
   const [reportSearch, setReportSearch] = useState('');
@@ -168,6 +197,50 @@ export default function Dashboard({ user, token, onLogout }: Props) {
     }, 500); // 500ms debounce
     return () => clearTimeout(handler);
   }, [searchInputValue, reportSearch]);
+
+  const [emailStatus, setEmailStatus] = useState<{ isReady: boolean, lastError: string | null, helpMessage?: string | null, config: any } | null>(null);
+  const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
+
+  const fetchEmailStatus = async () => {
+    try {
+      const response = await apiRequest('/api/settings/email-status');
+      if (response.ok) {
+        const data = await response.json();
+        setEmailStatus(data);
+      }
+    } catch (error) {
+      console.error('Fetch email status error:', error);
+    }
+  };
+
+  const handleVerifyEmail = async () => {
+    setIsVerifyingEmail(true);
+    try {
+      const response = await apiRequest('/api/settings/email-verify', { method: 'POST' });
+      const data = await response.json();
+      
+      if (data.status) {
+        setEmailStatus(data.status);
+      }
+      
+      if (response.ok && data.success) {
+        setUploadMessage({ type: 'success', text: 'Email SMTP connection verified successfully.' });
+      } else {
+        setUploadMessage({ type: 'error', text: data.status?.lastError || 'Email verification failed.' });
+      }
+    } catch (error) {
+      setUploadMessage({ type: 'error', text: 'Error triggering email verification.' });
+    } finally {
+      setIsVerifyingEmail(false);
+      setTimeout(() => setUploadMessage(null), 5000);
+    }
+  };
+
+  useEffect(() => {
+    if (user?.role === UserRole.ADMIN) {
+      fetchEmailStatus();
+    }
+  }, [user]);
 
   useEffect(() => {
     // Sync state to URL params
@@ -429,6 +502,29 @@ export default function Dashboard({ user, token, onLogout }: Props) {
     }
   };
 
+  const handleSyncClusters = async () => {
+    if (!confirm('This will recalculate clusters for all existing records. Continue?')) return;
+    
+    setIsSyncingClusters(true);
+    try {
+      const res = await apiRequest('/api/reports/maintenance/sync-clusters', {
+        method: 'POST'
+      });
+      const data = await res.json();
+      if (res.ok && data.message) {
+        setUploadMessage({ type: 'success', text: data.message });
+        await fetchReports(reportPage);
+        await fetchAnalysisData();
+      } else {
+        setUploadMessage({ type: 'error', text: data.message || 'Sync failed' });
+      }
+    } catch (err: any) {
+      setUploadMessage({ type: 'error', text: err.message || 'Sync failed' });
+    } finally {
+      setIsSyncingClusters(false);
+    }
+  };
+
   const handleUpdateSetting = async (key: string, value: any) => {
     try {
       const res = await apiRequest('/api/settings', {
@@ -464,13 +560,77 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   const [complianceStatus, setComplianceStatus] = useState<'For Evaluation' | 'Approved for Payment' | 'Issued COC' | 'Approved' | 'Deferred'>('Deferred');
   const [complianceDate, setComplianceDate] = useState(new Date().toISOString().split('T')[0]);
   const [evaluationRemarks, setEvaluationRemarks] = useState('');
+  const [cooperativeTypeEdit, setCooperativeTypeEdit] = useState('');
+  const [specificType, setSpecificType] = useState('');
+  const [dateInspected, setDateInspected] = useState('');
+  const [inspectionStatus, setInspectionStatus] = useState('');
+  const [dateIssuedRecommended, setDateIssuedRecommended] = useState('');
+  const [dateCompliedToOTCandSCO, setDateCompliedToOTCandSCO] = useState('');
   const [documentFindings, setDocumentFindings] = useState<Record<string, { value: string, findings: string }>>({});
+  const [isAiThinking, setIsAiThinking] = useState<string | null>(null);
+
+  const handleAiSuggest = async (docId: string, docLabel: string) => {
+    if (!process.env.GEMINI_API_KEY) {
+      setUploadMessage({ type: 'error', text: 'Gemini API Key not configured' });
+      return;
+    }
+    
+    setIsAiThinking(docId);
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const prompt = `You are a professional compliance evaluator for the Cooperative Development Authority (CDA).
+      
+      CONTEXT:
+      Cooperative Name: ${selectedReport.cooperativeName}
+      Cooperative Type: ${selectedReport.cooperativeType}
+      Document Type: ${docLabel}
+      Current Compliance Status: ${documentFindings[docId]?.value || 'Not Complying'}
+      
+      TASK: 
+      Generate a professional, concise, and formal "Summary of Findings" (evaluation remarks) for this specific document.
+      
+      GUIDELINES:
+      - 2 sentences maximum.
+      - Be technical and sector-appropriate.
+      - Use professional terminology.
+      - Do not use placeholders.
+      - If "Not Complying", suggest what is missing or incorrect based on document type.
+      - If "Complying", confirm full verification.`;
+
+      const result = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt
+      });
+
+      const suggestion = result.text;
+      if (suggestion) {
+        setDocumentFindings(prev => ({
+          ...prev,
+          [docId]: {
+            ...prev[docId],
+            findings: suggestion.replace(/[*#]/g, '').trim()
+          }
+        }));
+      }
+    } catch (err) {
+      console.error('AI Suggestion Error:', err);
+      setUploadMessage({ type: 'error', text: 'Failed to generate AI suggestion.' });
+    } finally {
+      setIsAiThinking(null);
+    }
+  };
   
   useEffect(() => {
     if (selectedReport) {
       setComplianceStatus(selectedReport.complianceStatus || 'Deferred');
       setComplianceDate(selectedReport.complianceDate || new Date().toISOString().split('T')[0]);
       setEvaluationRemarks(selectedReport.evaluationRemarks || '');
+      setCooperativeTypeEdit(selectedReport.cooperativeType || '');
+      setSpecificType(selectedReport.specificType || '');
+      setDateInspected(selectedReport.dateInspected ? new Date(selectedReport.dateInspected).toISOString().split('T')[0] : '');
+      setInspectionStatus(selectedReport.inspectionStatus || '');
+      setDateIssuedRecommended(selectedReport.dateIssuedRecommended ? new Date(selectedReport.dateIssuedRecommended).toISOString().split('T')[0] : '');
+      setDateCompliedToOTCandSCO(selectedReport.dateCompliedToOTCandSCO ? new Date(selectedReport.dateCompliedToOTCandSCO).toISOString().split('T')[0] : '');
 
       // Initialize document findings from parsedData
       const docTypes = [
@@ -478,8 +638,8 @@ export default function Dashboard({ user, token, onLogout }: Props) {
         { id: 'AFS', short: 'AFS', findingsKey: 'Summary of findings_5' },
         { id: 'SAR', short: 'SAR', findingsKey: 'Summary of findings_2' },
         { id: 'PAR', short: 'PAR', findingsKey: 'Summary of findings_3' },
-        { id: 'MEDCON', short: 'MEDCON', findingsKey: 'Summary of findings_4' },
         { id: 'SWORN STATEMENT AFFIDAVIT', short: 'SWORN', findingsKey: 'Summary of findings_6' },
+        { id: 'MEDCON', short: 'MEDCON', findingsKey: 'Summary of findings_4' },
       ];
 
       const initialFindings: Record<string, { value: string, findings: string }> = {};
@@ -494,6 +654,45 @@ export default function Dashboard({ user, token, onLogout }: Props) {
       setDocumentFindings(initialFindings);
     }
   }, [selectedReport]);
+
+  const handleAiSuggestMain = async () => {
+    if (!process.env.GEMINI_API_KEY) {
+      setUploadMessage({ type: 'error', text: 'Gemini API Key not configured' });
+      return;
+    }
+    
+    setIsAiThinking('main');
+    try {
+      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const summary = Object.entries(documentFindings)
+        .map(([id, data]: [string, any]) => `${id}: ${data.value} - ${data.findings}`)
+        .join('\n');
+
+      const prompt = `You are a professional compliance evaluator for the CDA.
+      Provide a comprehensive final evaluation summary for: ${selectedReport.cooperativeName}
+      
+      DETAILED DOCUMENT FINDINGS:
+      ${summary}
+      
+      TASK:
+      Generate a final 2-3 sentence overview that synthesizes these findings into a formal recommendation. Be direct and official.`;
+
+      const result = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: prompt
+      });
+
+      const suggestion = result.text;
+      if (suggestion) {
+        setEvaluationRemarks(suggestion.replace(/[*#]/g, '').trim());
+      }
+    } catch (err) {
+      console.error('AI Summary Error:', err);
+      setUploadMessage({ type: 'error', text: 'Failed to generate AI summary.' });
+    } finally {
+      setIsAiThinking(null);
+    }
+  };
 
   const handleUpdate = async () => {
     if (!selectedReport) return;
@@ -515,6 +714,12 @@ export default function Dashboard({ user, token, onLogout }: Props) {
         complianceStatus,
         complianceDate,
         evaluationRemarks,
+        cooperativeType: cooperativeTypeEdit,
+        specificType,
+        dateInspected,
+        inspectionStatus,
+        dateIssuedRecommended,
+        dateCompliedToOTCandSCO,
         // Update main status if Issued COC
         status: selectedReport.status,
         // Include updated document findings in parsedData
@@ -646,6 +851,8 @@ export default function Dashboard({ user, token, onLogout }: Props) {
       const params = new URLSearchParams();
       if (reportRegionFilter) params.append('region', reportRegionFilter);
       if (reportProvinceFilter) params.append('province', reportProvinceFilter);
+      if (reportCooperativeTypeFilter) params.append('cooperativeType', reportCooperativeTypeFilter);
+      if (reportCooperativeClusterFilter) params.append('cooperativeCluster', reportCooperativeClusterFilter);
       
       const res = await apiRequest(`/api/dashboard/stats${params.toString() ? `?${params.toString()}` : ''}`);
       if (res.ok) {
@@ -723,6 +930,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
         status: reportStatusFilter,
         complianceStatus: reportComplianceFilter,
         cooperativeType: reportCooperativeTypeFilter,
+        cooperativeCluster: reportCooperativeClusterFilter,
         region: reportRegionFilter,
         province: reportProvinceFilter,
         sortBy: reportSortBy,
@@ -771,12 +979,39 @@ export default function Dashboard({ user, token, onLogout }: Props) {
     }
   };
 
+  const fetchAnalysisData = async () => {
+    setIsAnalysisLoading(true);
+    try {
+      const params = new URLSearchParams({
+        status: reportStatusFilter,
+        complianceStatus: reportComplianceFilter,
+        cooperativeType: reportCooperativeTypeFilter,
+        cooperativeCluster: reportCooperativeClusterFilter,
+        region: reportRegionFilter,
+        province: reportProvinceFilter,
+        search: reportSearch
+      });
+
+      const url = `/api/reports/stats?${params.toString()}`;
+      const res = await apiRequest(url);
+      if (res.ok) {
+        const data = await res.json();
+        setAnalysisData(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch analysis data:', err);
+    } finally {
+      setIsAnalysisLoading(false);
+    }
+  };
+
   const handleExportCSV = async () => {
     try {
       const params = new URLSearchParams({
         status: reportStatusFilter,
         complianceStatus: reportComplianceFilter,
         cooperativeType: reportCooperativeTypeFilter,
+        cooperativeCluster: reportCooperativeClusterFilter,
         region: reportRegionFilter,
         province: reportProvinceFilter,
         sortBy: reportSortBy,
@@ -834,7 +1069,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
 
   useEffect(() => {
     fetchStats();
-  }, [token, reportRegionFilter, reportProvinceFilter]);
+  }, [token, reportRegionFilter, reportProvinceFilter, reportCooperativeTypeFilter, reportCooperativeClusterFilter]);
 
   useEffect(() => {
     fetchNotifications();
@@ -846,10 +1081,15 @@ export default function Dashboard({ user, token, onLogout }: Props) {
 
   useEffect(() => {
     if (activeTab === 'users') fetchUsers();
-    if (activeTab === 'reports') fetchReports(reportPage);
+    if (activeTab === 'reports' || activeTab === 'builder') {
+      fetchReports(reportPage);
+      if (activeTab === 'builder') {
+        fetchAnalysisData();
+      }
+    }
     if (activeTab === 'audit') fetchAuditLogs(auditPage);
     if (activeTab === 'settings') fetchSettings();
-  }, [token, activeTab, reportPage, auditPage, reportStatusFilter, reportComplianceFilter, reportCooperativeTypeFilter, reportRegionFilter, reportProvinceFilter, reportSortBy, reportSortOrder, reportSearch]);
+  }, [token, activeTab, reportPage, auditPage, reportStatusFilter, reportComplianceFilter, reportCooperativeTypeFilter, reportCooperativeClusterFilter, reportRegionFilter, reportProvinceFilter, reportSortBy, reportSortOrder, reportSearch]);
 
   const handlePasswordChange = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1009,7 +1249,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   };
 
   const renderIngest = () => (
-    <div className="space-y-6 max-w-4xl pr-4 md:pr-8 lg:pr-16">
+    <div className="space-y-6">
       <header>
         <h2 className="text-2xl font-bold text-[var(--text-main)] tracking-tight">Data Ingestion Engine</h2>
         <p className="text-sm text-[var(--text-muted)]">Bulk upload cooperative records with intelligent column mapping</p>
@@ -1169,7 +1409,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   );
 
   const renderAudit = () => (
-    <div className="space-y-6 pr-4 md:pr-8 lg:pr-16">
+    <div className="space-y-6">
       <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-[var(--text-main)] tracking-tight">Personnel Audit Trail</h2>
@@ -1253,7 +1493,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   );
 
   const renderSettings = () => (
-    <div className="space-y-8 max-w-5xl pr-4 md:pr-8 lg:pr-16">
+    <div className="space-y-8">
        <header className="flex flex-col md:flex-row md:items-end justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-[var(--text-main)] tracking-tight">System Configuration</h2>
@@ -1340,6 +1580,128 @@ export default function Dashboard({ user, token, onLogout }: Props) {
             </p>
          </div>
       </div>
+
+      {user?.role === UserRole.ADMIN && (
+        <div className="mt-8 space-y-8">
+           <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-sm overflow-hidden flex flex-col transition-colors">
+              <div className="px-8 py-5 border-b border-[var(--border)] bg-[var(--bg)] flex items-center justify-between transition-colors">
+                <h3 className="font-black text-[var(--text-main)] text-[10px] uppercase tracking-[0.2em]">External Integrations</h3>
+                <div className={`w-1.5 h-1.5 rounded-full shadow-lg ${emailStatus?.isReady ? 'bg-green-500 shadow-green-500/50' : 'bg-red-500 shadow-red-500/50'}`}></div>
+              </div>
+              <div className="p-8">
+                <div className="flex flex-col md:flex-row items-center justify-between gap-6 p-6 bg-[var(--bg)] rounded-3xl border border-[var(--border)] group hover:border-blue-500/50 transition-all">
+                  <div className="flex items-center gap-6">
+                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-colors ${emailStatus?.isReady ? 'bg-green-100 dark:bg-green-900/30 text-green-600' : 'bg-red-100 dark:bg-red-900/30 text-red-600'}`}>
+                      {emailStatus?.isReady ? <Check size={24} /> : <AlertTriangle size={24} />}
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="font-bold text-[var(--text-main)] uppercase tracking-tight">SMTP Email Notification Service</h4>
+                        <span className={`px-2 py-0.5 rounded text-[8px] font-black uppercase ${emailStatus?.isReady ? 'bg-green-100 dark:bg-green-900/30 text-green-600' : 'bg-red-100 dark:bg-red-900/30 text-red-600'}`}>
+                          {emailStatus?.isReady ? 'Active' : 'Offline'}
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-[var(--text-muted)] mt-1 font-medium max-w-sm">
+                        Necessary for delivering temporary credentials to regional personnel. 
+                        {emailStatus?.isReady 
+                          ? ` Connected to ${emailStatus.config.host} as ${emailStatus.config.user}.` 
+                          : ' Current credentials rejected by server.'
+                        }
+                      </p>
+                      {emailStatus?.helpMessage && (
+                        <p className="text-[10px] text-red-500 font-bold mt-2 bg-red-50 dark:bg-red-900/20 px-2 py-1 rounded inline-block">
+                          Note: {emailStatus.helpMessage}
+                        </p>
+                      )}
+                      
+                      {emailStatus?.lastError && !emailStatus?.helpMessage && (
+                        <p className="text-[10px] text-red-500 font-bold mt-2 font-mono bg-red-50 dark:bg-red-900/20 px-2 py-1 rounded inline-block">
+                          Error: {emailStatus.lastError}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={handleVerifyEmail}
+                      disabled={isVerifyingEmail}
+                      className="px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-600/20 transition-all flex items-center justify-center gap-2"
+                    >
+                      {isVerifyingEmail ? (
+                        <>
+                          <div className="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                          Re-testing Link...
+                        </>
+                      ) : (
+                        <>
+                          <RefreshCw size={12} />
+                          Test Connection
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
+                
+                {!emailStatus?.isReady && (
+                   <div className="mt-6 p-6 bg-slate-50 dark:bg-slate-900/40 rounded-3xl border border-dashed border-[var(--border)]">
+                      <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Resolution Guide</h5>
+                      <ul className="space-y-2">
+                        <li className="flex items-start gap-2 text-[11px] text-[var(--text-muted)]">
+                          <span className="w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500 shrink-0">1</span>
+                          Go to <strong>Settings</strong> &gt; <strong>Secrets</strong> in the AI Studio sidebar.
+                        </li>
+                        <li className="flex items-start gap-2 text-[11px] text-[var(--text-muted)]">
+                          <span className="w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500 shrink-0">2</span>
+                          Update <code>EMAIL_USER</code> and <code>EMAIL_PASS</code>.
+                        </li>
+                        <li className="flex items-start gap-2 text-[11px] text-[var(--text-muted)]">
+                          <span className="w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500 shrink-0">3</span>
+                          If using Gmail, use an <strong>App Password</strong>, not your regular Google password.
+                        </li>
+                      </ul>
+                   </div>
+                )}
+              </div>
+           </div>
+
+           <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-sm overflow-hidden flex flex-col transition-colors">
+              <div className="px-8 py-5 border-b border-[var(--border)] bg-[var(--bg)] flex items-center justify-between transition-colors">
+                <h3 className="font-black text-[var(--text-main)] text-[10px] uppercase tracking-[0.2em]">Maintenance Tools</h3>
+                <div className="w-1.5 h-1.5 rounded-full bg-orange-500 shadow-[0_0_8px_rgba(249,115,22,0.5)]"></div>
+              </div>
+              <div className="p-8 space-y-6">
+                <div className="flex flex-col md:flex-row items-center justify-between gap-6 p-6 bg-[var(--bg)] rounded-2xl border border-[var(--border)] group hover:border-orange-500/50 transition-all">
+                  <div className="max-w-md">
+                    <div className="font-bold text-sm text-[var(--text-main)] flex items-center gap-2">
+                      <Layers size={16} className="text-orange-500" />
+                      Synchronize Cooperative Clusters
+                    </div>
+                    <p className="text-[11px] text-[var(--text-muted)] mt-1 font-medium italic">
+                      Automatically recalculates and updates the cluster category for all existing reports based on their cooperative type. Use this after updating cluster definitions.
+                    </p>
+                  </div>
+                  <button 
+                    onClick={handleSyncClusters}
+                    disabled={isSyncingClusters}
+                    className="w-full md:w-auto px-6 py-2.5 bg-orange-600 hover:bg-orange-700 disabled:bg-slate-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-orange-600/20 transition-all flex items-center justify-center gap-2"
+                  >
+                    {isSyncingClusters ? (
+                      <>
+                        <div className="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                        Processing...
+                      </>
+                    ) : (
+                      <>
+                        <RefreshCw size={12} />
+                        Launch Synchronization
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+        </div>
+      )}
     </div>
   );
 
@@ -1358,8 +1720,332 @@ export default function Dashboard({ user, token, onLogout }: Props) {
     </button>
   );
 
+  const renderBuilder = () => {
+    const availableFields = [
+      { id: 'cooperativeName', label: 'Cooperative Name' },
+      { id: 'registrationNumber', label: 'Registration Number' },
+      { id: 'region', label: 'Region' },
+      { id: 'status', label: 'Registry Status' },
+      { id: 'complianceStatus', label: 'Compliance Status' },
+      { id: 'inspectionStatus', label: 'Inspection Status' },
+      { id: 'submissionDate', label: 'Submission Date' },
+      { id: 'dateInspected', label: 'Date Inspected' },
+      { id: 'dateIssuedRecommended', label: 'Date Issued/Rec' },
+      { id: 'dateCompliedToOTCandSCO', label: 'Date Complied OTC/SCO' },
+      { id: 'delay', label: 'Days Delayed' },
+      { id: 'penalty', label: 'Penalty Amount' },
+    ];
+
+    const toggleField = (id: string) => {
+      setSelectedBuilderFields(prev => 
+        prev.includes(id) ? prev.filter(f => f !== id) : [...prev, id]
+      );
+    };
+
+    const complianceStats = analysisData?.complianceStats || [];
+    const regionStats = analysisData?.regionStats || [];
+    const clusterStats = analysisData?.clusterStats || [];
+
+    const COLORS = ['#2563eb', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
+
+    return (
+      <div className="space-y-8 w-full">
+        <header className="flex flex-col md:flex-row md:items-end justify-between gap-6">
+          <div>
+            <h2 className="text-3xl font-display font-bold text-[var(--text-main)] tracking-tight">Report Builder</h2>
+            <p className="text-sm text-[var(--text-muted)]">Select fields and dimensions to generate a custom appraisal report</p>
+          </div>
+          <div className="flex gap-3">
+            <button 
+              onClick={() => setSelectedBuilderFields(availableFields.map(f => f.id))}
+              className="px-4 py-2 text-[10px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest hover:bg-blue-600/10 rounded-xl transition-all"
+            >
+              Select All
+            </button>
+            <button 
+              onClick={() => setSelectedBuilderFields([])}
+              className="px-4 py-2 text-[10px] font-black text-red-600 dark:text-red-400 uppercase tracking-widest hover:bg-red-600/10 rounded-xl transition-all"
+            >
+              Clear All
+            </button>
+          </div>
+        </header>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-sm overflow-hidden p-8 transition-colors relative">
+              {isAnalysisLoading && (
+                <div className="absolute inset-0 bg-[var(--card)]/50 backdrop-blur-[2px] z-10 flex items-center justify-center">
+                  <div className="flex flex-col items-center gap-3">
+                    <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                    <p className="text-[10px] font-black uppercase tracking-widest text-[var(--text-muted)]">Recalculating...</p>
+                  </div>
+                </div>
+              )}
+              <h3 className="text-[11px] font-black text-[var(--text-muted)] uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                <BarChart3 size={14} className="text-emerald-500" />
+                Live Analysis & Trends
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                {complianceStats.length > 0 || regionStats.length > 0 ? (
+                  <>
+                    <div className="h-64 flex flex-col">
+                       <p className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest mb-4 text-center">Compliance Status Breakdown</p>
+                       <div className="flex-1 min-h-0">
+                         <ResponsiveContainer width="100%" height="100%">
+                          <PieChart>
+                            <Pie
+                              data={complianceStats}
+                              cx="50%"
+                              cy="50%"
+                              innerRadius={60}
+                              outerRadius={80}
+                              paddingAngle={5}
+                              dataKey="value"
+                            >
+                              {complianceStats.map((entry, index) => (
+                                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                              ))}
+                            </Pie>
+                            <Tooltip 
+                              contentStyle={{ 
+                                backgroundColor: '#1E293B', 
+                                border: 'none', 
+                                borderRadius: '12px',
+                                color: '#fff',
+                                fontSize: '10px'
+                              }} 
+                            />
+                            <Legend 
+                              verticalAlign="bottom" 
+                              height={36} 
+                              iconType="circle"
+                              formatter={(value) => <span className="text-[10px] text-[var(--text-muted)] font-bold">{value}</span>}
+                            />
+                          </PieChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="h-64 flex flex-col">
+                       <p className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest mb-4 text-center">Top Regions by Submission</p>
+                       <div className="flex-1 min-h-0">
+                         <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={regionStats}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                            <XAxis 
+                              dataKey="name" 
+                              axisLine={false} 
+                              tickLine={false} 
+                              tick={{ fontSize: 9, fontWeight: 'bold' }}
+                            />
+                            <YAxis axisLine={false} tickLine={false} tick={{ fontSize: 9 }} />
+                            <Tooltip 
+                              cursor={{ fill: 'transparent' }}
+                              contentStyle={{ 
+                                backgroundColor: '#1E293B', 
+                                border: 'none', 
+                                borderRadius: '12px',
+                                color: '#fff',
+                                fontSize: '10px'
+                              }}
+                            />
+                            <Bar 
+                              dataKey="value" 
+                              fill="#3B82F6" 
+                              radius={[6, 6, 0, 0]} 
+                              barSize={30}
+                            />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+
+                    <div className="h-64 flex flex-col md:col-span-2">
+                       <p className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest mb-4 text-center">Cluster Distribution</p>
+                       <div className="flex-1 min-h-0">
+                         <ResponsiveContainer width="100%" height="100%">
+                          <BarChart data={clusterStats} layout="vertical">
+                            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#E2E8F0" />
+                            <XAxis type="number" hide />
+                            <YAxis 
+                              dataKey="name" 
+                              type="category" 
+                              axisLine={false} 
+                              tickLine={false} 
+                              width={150}
+                              tick={{ fontSize: 8, fontWeight: 'black', fill: '#64748b' }}
+                            />
+                            <Tooltip 
+                              cursor={{ fill: 'rgba(59, 130, 246, 0.05)' }}
+                              contentStyle={{ 
+                                backgroundColor: '#1E293B', 
+                                border: 'none', 
+                                borderRadius: '12px',
+                                color: '#fff',
+                                fontSize: '10px'
+                              }}
+                            />
+                            <Bar 
+                              dataKey="value" 
+                              fill="#6366f1" 
+                              radius={[0, 6, 6, 0]} 
+                              barSize={20}
+                            />
+                          </BarChart>
+                        </ResponsiveContainer>
+                      </div>
+                    </div>
+                  </>
+                ) : (
+                  <div className="col-span-1 md:col-span-2 h-64 flex flex-col items-center justify-center border border-dashed border-[var(--border)] rounded-2xl bg-[var(--bg)]">
+                    <BarChart3 size={32} className="text-[var(--text-muted)] mb-4 opacity-20" />
+                    <p className="text-sm font-bold text-[var(--text-muted)]">No analysis data found</p>
+                    <p className="text-[10px] uppercase font-black tracking-widest text-[var(--text-muted)] opacity-50 mt-1">Adjust dimensions selection or try different filters</p>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-sm overflow-hidden p-8 transition-colors">
+              <h3 className="text-[11px] font-black text-[var(--text-muted)] uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                <Layout size={14} className="text-blue-500" />
+                Data Dimensions Selection
+              </h3>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {availableFields.map((field) => (
+                  <button
+                    key={field.id}
+                    onClick={() => toggleField(field.id)}
+                    className={`flex items-center gap-4 p-4 rounded-2xl border transition-all ${
+                      selectedBuilderFields.includes(field.id)
+                        ? 'bg-blue-600 border-blue-600 text-white shadow-lg shadow-blue-600/20'
+                        : 'bg-[var(--bg)] border-[var(--border)] text-[var(--text-muted)] hover:border-blue-400'
+                    }`}
+                  >
+                    <div className={`w-5 h-5 rounded-md flex items-center justify-center border ${
+                      selectedBuilderFields.includes(field.id) ? 'bg-white text-blue-600 border-white' : 'border-[var(--border)]'
+                    }`}>
+                      {selectedBuilderFields.includes(field.id) && <Check size={14} strokeWidth={4} />}
+                    </div>
+                    <span className="text-sm font-bold tracking-tight">{field.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl shadow-sm overflow-hidden p-8 transition-colors">
+              <h3 className="text-[11px] font-black text-[var(--text-muted)] uppercase tracking-[0.2em] mb-6 flex items-center gap-2">
+                <Filter size={14} className="text-purple-500" />
+                Active Dataset Filters
+              </h3>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest pl-1">Region</label>
+                  <select 
+                    value={reportRegionFilter}
+                    onChange={(e) => setReportRegionFilter(e.target.value)}
+                    className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-xs font-bold text-[var(--text-main)] outline-none transition-all appearance-none"
+                  >
+                    <option value="">All Regions</option>
+                    {PHILIPPINE_REGIONS.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest pl-1">Compliance Status</label>
+                  <select 
+                    value={reportComplianceFilter}
+                    onChange={(e) => setReportComplianceFilter(e.target.value)}
+                    className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-xs font-bold text-[var(--text-main)] outline-none transition-all appearance-none"
+                  >
+                    <option value="">All Statuses</option>
+                    <option value="For Evaluation">For Evaluation</option>
+                    <option value="Approved for Payment">Approved for Payment</option>
+                    <option value="Issued COC">Issued COC</option>
+                    <option value="Approved">Approved</option>
+                    <option value="Deferred">Deferred</option>
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest pl-1">Registry Status</label>
+                  <select 
+                   value={reportStatusFilter}
+                   onChange={(e) => setReportStatusFilter(e.target.value)}
+                   className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-xs font-bold text-[var(--text-main)] outline-none transition-all appearance-none"
+                  >
+                    <option value="">All Registry</option>
+                    <option value="Complied">Complied</option>
+                    <option value="Not Complied">Not Complied</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <div className="space-y-6">
+            <div className="bg-[#0F172A] rounded-3xl p-8 text-white relative overflow-hidden shadow-2xl">
+              <div className="absolute top-0 right-0 p-8 opacity-10 pointer-events-none">
+                <FileText size={120} />
+              </div>
+              
+              <h3 className="text-xl font-bold mb-2">Report Summary</h3>
+              <p className="text-slate-400 text-xs mb-8">Generated document will contain {reports.length} records with {selectedBuilderFields.length} data points per entry.</p>
+              
+              <div className="space-y-4 mb-10">
+                <div className="flex justify-between items-center bg-slate-800/50 p-4 rounded-2xl border border-slate-700/50">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Selected Fields</span>
+                  <span className="text-sm font-black text-blue-400">{selectedBuilderFields.length}</span>
+                </div>
+                <div className="flex justify-between items-center bg-slate-800/50 p-4 rounded-2xl border border-slate-700/50">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Target Records</span>
+                  <span className="text-sm font-black text-blue-400">{reports.length}</span>
+                </div>
+              </div>
+
+              <button 
+                onClick={() => {
+                  const fieldsToGenerate = availableFields.filter(f => selectedBuilderFields.includes(f.id));
+                  generateCustomReport(reports, fieldsToGenerate, {
+                    region: reportRegionFilter,
+                    status: reportStatusFilter
+                  }, user);
+                }}
+                disabled={selectedBuilderFields.length === 0 || reports.length === 0}
+                className="w-full py-4 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-blue-600/20 transition-all flex items-center justify-center gap-2 group"
+              >
+                <Download size={18} className="group-hover:translate-y-0.5 transition-transform" />
+                Forge Document (PDF)
+              </button>
+            </div>
+
+            <div className="bg-[var(--card)] border border-[var(--border)] rounded-3xl p-8 transition-colors">
+              <h4 className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest mb-4">Builder Intelligence</h4>
+              <ul className="space-y-4">
+                {[
+                  { text: 'Dynamic Column Mapping', icon: CheckCircle2 },
+                  { text: 'Landscape Orientation Auto-scaling', icon: CheckCircle2 },
+                  { text: 'Regional Data Partitioning', icon: CheckCircle2 },
+                  { text: 'Compliance Filter Integration', icon: CheckCircle2 },
+                ].map((item, i) => (
+                  <li key={i} className="flex items-center gap-3 text-xs font-bold text-[var(--text-main)] transition-colors">
+                    <item.icon size={14} className="text-green-500" />
+                    {item.text}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   const renderDashboard = () => (
-    <div className="space-y-8 pr-4 md:pr-8 lg:pr-16">
+    <div className="space-y-8">
       <header className="mb-10">
         <h1 className="text-3xl font-display font-bold text-[var(--text-main)] tracking-tight mb-2">Dashboard Overview</h1>
         <p className="text-sm text-[var(--text-muted)]">Real-time data synchronization for Cooperative Development Authority</p>
@@ -1403,7 +2089,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
           </div>
           <div className="flex-1 w-full flex flex-col">
              <div className="h-[250px]">
-               <ResponsiveContainer width="100%" height="100%">
+               <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
                   <BarChart data={displayChartData} margin={{ top: 20, right: 30, left: -20, bottom: 5 }}>
                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#F1F5F9" />
                     <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: '#94A3B8', fontSize: 10, fontWeight: 700 }} dy={10} />
@@ -1464,7 +2150,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
             <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
           </div>
           <div className="flex-1 w-full min-h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
+            <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={0}>
               <BarChart layout="vertical" data={cooperativeTypeData} margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#F1F5F9" />
                 <XAxis type="number" axisLine={false} tickLine={false} tick={{ fill: '#94A3B8', fontSize: 9, fontWeight: 700 }} />
@@ -1490,8 +2176,317 @@ export default function Dashboard({ user, token, onLogout }: Props) {
     </div>
   );
 
+  const handleAddCoop = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setUserActionLoading(true);
+    setUploadMessage(null);
+    try {
+      const res = await apiRequest('/api/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newCoop)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setUploadMessage({ type: 'success', text: data.message });
+        setIsAddingCoop(false);
+        setShowSecondaryType(false);
+        setNewCoop({
+          cooperativeName: '',
+          registrationNumber: '',
+          cooperativeType: '',
+          secondaryCooperativeType: '',
+          specificType: '',
+          cooperativeCluster: '',
+          secondaryCooperativeCluster: '',
+          region: user?.region || '',
+          province: '',
+          municipality: '',
+          street: '',
+          category: '',
+          assetSize2025: '',
+          assetSize2026: '',
+          status: 'Complied'
+        });
+        fetchReports(reportPage);
+        fetchStats();
+      } else {
+        setUploadMessage({ type: 'error', text: data.message });
+      }
+    } catch (err: any) {
+      setUploadMessage({ type: 'error', text: err.message || 'Failed to create record' });
+    } finally {
+      setUserActionLoading(false);
+    }
+  };
+
+  const renderAddCoopModal = () => (
+    <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4">
+      <motion.div 
+        initial={{ opacity: 0, scale: 0.95, y: 20 }}
+        animate={{ opacity: 1, scale: 1, y: 0 }}
+        className="bg-[var(--card)] border border-[var(--border)] rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden overflow-y-auto max-h-[90vh]"
+      >
+        <div className="px-8 py-6 border-b border-[var(--border)] bg-[var(--bg)] flex items-center justify-between">
+          <div>
+            <h3 className="text-xl font-bold text-[var(--text-main)]">Register New Cooperative</h3>
+            <p className="text-xs text-[var(--text-muted)] font-medium mt-1">Manual entry for individual cooperative records</p>
+          </div>
+          <button onClick={() => { setIsAddingCoop(false); setShowSecondaryType(false); }} className="p-2 hover:bg-[var(--bg)] rounded-xl transition-colors">
+            <X size={20} className="text-[var(--text-muted)]" />
+          </button>
+        </div>
+        
+        <form onSubmit={handleAddCoop} className="p-8 space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Cooperative Name *</label>
+              <input 
+                type="text" 
+                required
+                value={newCoop.cooperativeName}
+                onChange={e => setNewCoop({...newCoop, cooperativeName: e.target.value})}
+                placeholder="Enter full legal name"
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all placeholder:font-medium placeholder:opacity-50"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Registration Number *</label>
+              <input 
+                type="text" 
+                required
+                value={newCoop.registrationNumber}
+                onChange={e => setNewCoop({...newCoop, registrationNumber: e.target.value})}
+                placeholder="CDA-REG-XXXXX"
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all placeholder:font-medium placeholder:opacity-50"
+              />
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between ml-1">
+                <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest">Cooperative Type</label>
+                {!showSecondaryType && (
+                  <button 
+                    type="button"
+                    onClick={() => setShowSecondaryType(true)}
+                    className="text-[10px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest hover:underline flex items-center gap-1"
+                  >
+                    <Plus size={10} /> Add Type
+                  </button>
+                )}
+              </div>
+              <select 
+                value={newCoop.cooperativeType}
+                onChange={e => {
+                  const val = e.target.value;
+                  const clusterObj = COOPERATIVE_CLUSTERS.find(c => c.types.includes(val));
+                  setNewCoop({
+                    ...newCoop, 
+                    cooperativeType: val,
+                    cooperativeCluster: clusterObj ? clusterObj.name : ''
+                  });
+                }}
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all"
+              >
+                <option value="">Select Type</option>
+                {ALL_COOP_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+            
+            {showSecondaryType && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between ml-1">
+                  <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest">Secondary Cooperative Type</label>
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setShowSecondaryType(false);
+                      setNewCoop({...newCoop, secondaryCooperativeType: '', secondaryCooperativeCluster: ''});
+                    }}
+                    className="text-[10px] font-black text-red-600 dark:text-red-400 uppercase tracking-widest hover:underline"
+                  >
+                    Remove
+                  </button>
+                </div>
+                <select 
+                  value={newCoop.secondaryCooperativeType}
+                  onChange={e => {
+                    const val = e.target.value;
+                    const clusterObj = COOPERATIVE_CLUSTERS.find(c => c.types.includes(val));
+                    setNewCoop({
+                      ...newCoop, 
+                      secondaryCooperativeType: val,
+                      secondaryCooperativeCluster: clusterObj ? clusterObj.name : ''
+                    });
+                  }}
+                  className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all border-dashed border-slate-300 dark:border-slate-700"
+                >
+                  <option value="">Select Secondary Type</option>
+                  {ALL_COOP_TYPES.filter(t => t !== newCoop.cooperativeType).map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+            )}
+            
+            {(newCoop.cooperativeType || newCoop.secondaryCooperativeType) && (
+              <div className="space-y-2 md:col-span-2">
+                <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Assigned Cluster(s)</label>
+                <div className="flex flex-col gap-2">
+                  {newCoop.cooperativeType && (
+                    <div className="flex items-center justify-between bg-blue-50 dark:bg-blue-900/20 px-4 py-3 rounded-xl border border-blue-100 dark:border-blue-800/50">
+                      <div>
+                        <p className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase tracking-tighter">Primary Category Cluster</p>
+                        <p className="text-sm font-black text-blue-900 dark:text-blue-100">{newCoop.cooperativeCluster || 'Not Classified'}</p>
+                      </div>
+                      <Layers size={18} className="text-blue-500 opacity-50" />
+                    </div>
+                  )}
+                  {newCoop.secondaryCooperativeType && (
+                    <div className="flex items-center justify-between bg-purple-50 dark:bg-purple-900/20 px-4 py-3 rounded-xl border border-purple-100 dark:border-purple-800/50">
+                      <div>
+                        <p className="text-[10px] font-bold text-purple-600 dark:text-purple-400 uppercase tracking-tighter">Secondary Category Cluster</p>
+                        <p className="text-sm font-black text-purple-900 dark:text-purple-100">{newCoop.secondaryCooperativeCluster || 'Not Classified'}</p>
+                      </div>
+                      <Layers size={18} className="text-purple-500 opacity-50" />
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Specific Type / Purpose</label>
+              <input 
+                type="text" 
+                value={newCoop.specificType}
+                onChange={e => setNewCoop({...newCoop, specificType: e.target.value})}
+                placeholder="e.g. Rice Producers, etc."
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all placeholder:font-medium placeholder:opacity-50"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Registry Status</label>
+              <select 
+                value={newCoop.status}
+                onChange={e => setNewCoop({...newCoop, status: e.target.value})}
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all"
+              >
+                <option value="Complied">Complied</option>
+                <option value="Not Complied">Not Complied</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Region</label>
+              <select 
+                value={newCoop.region}
+                onChange={e => setNewCoop({...newCoop, region: e.target.value, province: ''})}
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all"
+              >
+                <option value="">Select Region</option>
+                {PHILIPPINE_REGIONS.map(r => <option key={r.id} value={r.id}>{r.name} ({r.id})</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Province</label>
+              <select 
+                value={newCoop.province}
+                onChange={e => setNewCoop({...newCoop, province: e.target.value})}
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all"
+              >
+                <option value="">Select Province</option>
+                {PHILIPPINE_PROVINCES.filter(p => p.regionId === newCoop.region).map(p => <option key={p.name} value={p.name}>{p.name}</option>)}
+              </select>
+            </div>
+            <div className="space-y-2">
+               <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Category</label>
+               <select 
+                value={newCoop.category}
+                onChange={e => setNewCoop({...newCoop, category: e.target.value})}
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all"
+              >
+                <option value="">Select Category</option>
+                <option value="Micro">Micro</option>
+                <option value="Small">Small</option>
+                <option value="Medium">Medium</option>
+                <option value="Large">Large</option>
+              </select>
+            </div>
+            <div className="space-y-2 text-right flex flex-col justify-end">
+               <p className="text-[10px] text-[var(--text-muted)] italic mb-2">Registration will be attributed to current operator.</p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Full Office Address</label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <input 
+                type="text" 
+                value={newCoop.municipality}
+                onChange={e => setNewCoop({...newCoop, municipality: e.target.value})}
+                placeholder="City/Municipality"
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all"
+              />
+              <input 
+                type="text" 
+                value={newCoop.street}
+                onChange={e => setNewCoop({...newCoop, street: e.target.value})}
+                placeholder="Street/Barangay"
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-4 border-t border-[var(--border)]">
+             <div className="space-y-2">
+              <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Asset Size 2025</label>
+              <input 
+                type="text" 
+                value={newCoop.assetSize2025}
+                onChange={e => setNewCoop({...newCoop, assetSize2025: e.target.value})}
+                placeholder="Enter amount"
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest ml-1">Asset Size 2026</label>
+              <input 
+                type="text" 
+                value={newCoop.assetSize2026}
+                onChange={e => setNewCoop({...newCoop, assetSize2026: e.target.value})}
+                placeholder="Enter amount"
+                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm font-bold text-[var(--text-main)] focus:border-blue-500 outline-none transition-all"
+              />
+            </div>
+          </div>
+
+          <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800/50 p-4 rounded-2xl flex gap-4 transition-colors">
+            <Shield size={20} className="text-blue-600 dark:text-blue-400 shrink-0" />
+            <p className="text-[11px] text-blue-700 dark:text-blue-300 font-medium leading-relaxed">
+              New records are automatically assigned a <span className="font-bold underline">Pending</span> evaluation status. Compliance status can be updated via the repository after creation.
+            </p>
+          </div>
+
+          <div className="flex gap-4 pt-2">
+            <button 
+              type="button"
+              onClick={() => { setIsAddingCoop(false); setShowSecondaryType(false); }}
+              className="flex-1 px-6 py-4 bg-[var(--bg)] border border-[var(--border)] rounded-2xl text-sm font-black text-[var(--text-muted)] uppercase tracking-widest hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+            >
+              Discard Changes
+            </button>
+            <button 
+              type="submit"
+              disabled={userActionLoading || !newCoop.cooperativeName || !newCoop.registrationNumber}
+              className="flex-1 px-6 py-4 bg-blue-600 text-white rounded-2xl text-sm font-black uppercase tracking-widest shadow-xl shadow-blue-600/20 hover:bg-blue-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+            >
+              {userActionLoading ? <FuturisticLoader size={20} text="" /> : 'Create Cooperative Record'}
+            </button>
+          </div>
+        </form>
+      </motion.div>
+    </div>
+  );
+
   const renderReports = () => (
-    <div className="space-y-6 pr-4 md:pr-8 lg:pr-16">
+    <div className="space-y-6">
       <header className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold text-[var(--text-main)] tracking-tight">Report Repository</h2>
@@ -1500,11 +2495,29 @@ export default function Dashboard({ user, token, onLogout }: Props) {
 
         <div className="flex items-center gap-2">
           <button
+            onClick={() => setIsAddingCoop(true)}
+            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-green-600/20 transition-all flex items-center gap-2 mr-2"
+          >
+            <UserPlus size={16} />
+            Add New
+          </button>
+          <button
             onClick={handleExportCSV}
             className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 transition-all flex items-center gap-2 mr-2"
           >
             <Download size={16} />
             Export CSV
+          </button>
+          <button
+            onClick={() => generateSummaryReport(reports, {
+              status: reportStatusFilter,
+              complianceStatus: reportComplianceFilter,
+              region: reportRegionFilter
+            }, user)}
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2 mr-4"
+          >
+            <FileText size={16} />
+            Download PDF
           </button>
           <button
             disabled={reportPage === 1 || reportsLoading}
@@ -1539,7 +2552,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
               value={searchInputValue}
               onChange={(e) => setSearchInputValue(e.target.value)}
               placeholder="Filter by cooperative name or registration number..."
-              className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-10 py-2.5 text-sm font-medium text-[var(--text-main)] outline-none focus:border-blue-500 transition-all"
+              className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-10 py-2.5 text-sm font-medium text-[var(--text-main)] outline-none focus:border-blue-500 transition-all dark:bg-slate-950 dark:text-slate-100 dark:hover:bg-black"
             />
             <div className="absolute left-3 top-1/2 -translate-y-1/2 text-[var(--text-muted)]">
               <Search size={18} />
@@ -1571,13 +2584,33 @@ export default function Dashboard({ user, token, onLogout }: Props) {
               setReportComplianceFilter(e.target.value);
               setReportPage(1);
             }}
-            className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-colors"
+            className="w-full bg-[var(--bg)] border border-blue-500/30 rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all hover:border-blue-500/50 cursor-pointer shadow-sm shadow-blue-500/5 hover:bg-blue-500/5 dark:bg-slate-950 dark:text-slate-100 dark:hover:bg-black"
           >
             <option value="">All Compliance</option>
             <option value="Approved">Approved</option>
+            <option value="Approved for Payment">Approved for Payment</option>
             <option value="Issued COC">Issued COC</option>
             <option value="Deferred">Deferred</option>
             <option value="For Evaluation">For Evaluation</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 text-[9px] font-black text-[var(--text-muted)] uppercase tracking-[0.2em] mb-2 ml-1 opacity-70">
+            <span className="w-1 h-1 bg-orange-500 rounded-full"></span>
+            Registry Status
+          </label>
+          <select 
+            value={reportStatusFilter}
+            onChange={(e) => {
+              setReportStatusFilter(e.target.value);
+              setReportPage(1);
+            }}
+            className="w-full bg-[var(--bg)] border border-orange-500/30 rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-orange-500 focus:ring-4 focus:ring-orange-500/10 transition-all hover:border-orange-500/50 cursor-pointer shadow-sm shadow-orange-500/5 hover:bg-orange-500/5 dark:bg-slate-950 dark:text-slate-100 dark:hover:bg-black"
+          >
+            <option value="">All Registry</option>
+            <option value="Complied">Complied</option>
+            <option value="Not Complied">Not Complied</option>
           </select>
         </div>
 
@@ -1594,7 +2627,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                 setReportProvinceFilter(''); // Reset province when region changes
                 setReportPage(1);
               }}
-              className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-colors"
+              className="w-full bg-[var(--bg)] border border-blue-500/30 rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all hover:border-blue-500/50 cursor-pointer shadow-sm shadow-blue-500/5 hover:bg-blue-500/5 dark:bg-slate-950 dark:text-slate-100 dark:hover:bg-black"
             >
               <option value="">All Regions</option>
               {PHILIPPINE_REGIONS.map(reg => (
@@ -1615,7 +2648,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                 setReportProvinceFilter(e.target.value);
                 setReportPage(1);
               }}
-              className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-colors"
+              className="w-full bg-[var(--bg)] border border-blue-500/30 rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all hover:border-blue-500/50 cursor-pointer shadow-sm shadow-blue-500/5 hover:bg-blue-500/5 dark:bg-slate-950 dark:text-slate-100 dark:hover:bg-black"
             >
               <option value="">All Provinces</option>
               {PHILIPPINE_PROVINCES.filter(p => {
@@ -1649,18 +2682,55 @@ export default function Dashboard({ user, token, onLogout }: Props) {
               setReportCooperativeTypeFilter(e.target.value);
               setReportPage(1);
             }}
-            className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-colors"
+            className="w-full bg-[var(--bg)] border border-blue-500/30 rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all hover:border-blue-500/50 cursor-pointer shadow-sm shadow-blue-500/5 hover:bg-blue-500/5 dark:bg-slate-950 dark:text-slate-100 dark:hover:bg-black"
+            id="coop_type_filter_select"
           >
             <option value="">All Types</option>
-            <option value="Multipurpose">Multipurpose</option>
-            <option value="Credit">Credit</option>
-            <option value="Consumer">Consumer</option>
-            <option value="Producers">Producers</option>
-            <option value="Marketing">Marketing</option>
-            <option value="Service">Service</option>
-            <option value="Transport">Transport</option>
-            <option value="Others">Others</option>
+            {ALL_COOP_TYPES.map(type => (
+              <option key={type} value={type}>{type}</option>
+            ))}
           </select>
+        </div>
+
+        <div>
+          <label className="flex items-center gap-2 text-[9px] font-black text-[var(--text-muted)] uppercase tracking-[0.2em] mb-2 ml-1 opacity-70">
+            <span className="w-1 h-1 bg-blue-500 rounded-full"></span>
+            Filter by Cluster
+          </label>
+          <select 
+            value={reportCooperativeClusterFilter}
+            onChange={(e) => {
+              setReportCooperativeClusterFilter(e.target.value);
+              setReportPage(1);
+            }}
+            className="w-full bg-[var(--bg)] border border-blue-500/30 rounded-lg px-3 py-2 text-xs font-bold text-[var(--text-main)] outline-none focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all hover:border-blue-500/50 cursor-pointer shadow-sm shadow-blue-500/5 hover:bg-blue-500/5 dark:bg-slate-950 dark:text-slate-100 dark:hover:bg-black"
+            id="cluster_filter_select"
+          >
+            <option value="">All Clusters</option>
+            {COOPERATIVE_CLUSTERS.map(cluster => (
+              <option key={cluster.name} value={cluster.name}>{cluster.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div className="flex items-end">
+          <button
+            onClick={() => {
+              setReportStatusFilter('');
+              setReportComplianceFilter('');
+              setReportRegionFilter('');
+              setReportProvinceFilter('');
+              setReportCooperativeTypeFilter('');
+              setReportCooperativeClusterFilter('');
+              setReportSearch('');
+              setSearchInputValue('');
+              setReportPage(1);
+            }}
+            className="w-full px-4 py-2 border border-red-500/20 bg-red-500/5 hover:bg-black hover:border-red-500 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all flex items-center justify-center gap-2 group text-red-500 dark:hover:bg-black"
+          >
+            <X size={14} className="group-hover:rotate-90 transition-transform" />
+            Clear All Filters
+          </button>
         </div>
       </div>
     </div>
@@ -1673,6 +2743,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
               <th className="px-6 py-4">Cooperative Name</th>
               <th className="px-6 py-4">Region</th>
               <th className="px-6 py-4">Type</th>
+              <th className="px-6 py-4">Cluster</th>
               <th className="px-6 py-4">Compliance</th>
               <th className="px-6 py-4">Date Updated</th>
               <th className="px-6 py-4 text-right">Actions</th>
@@ -1699,8 +2770,63 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                   <td className="px-6 py-4 font-bold text-[var(--text-muted)]">
                     {PHILIPPINE_REGIONS.find(reg => reg.id === r.region)?.id || r.region}
                   </td>
-                  <td className="px-6 py-4 text-[var(--text-muted)] font-medium">
-                    {r.cooperativeType || r.reportType}
+                  <td className="px-6 py-4">
+                    <div className="flex flex-col gap-1">
+                      <div className="text-[var(--text-main)] font-black text-[11px] uppercase tracking-tight">
+                        {r.cooperativeType || r.reportType}
+                      </div>
+                      {r.secondaryCooperativeType && (
+                        <div className="text-[10px] font-bold text-blue-500/70 uppercase tracking-tighter flex items-center gap-1">
+                          <Plus size={8} /> {r.secondaryCooperativeType}
+                        </div>
+                      )}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="flex flex-col gap-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                          (() => {
+                            const cluster = COOPERATIVE_CLUSTERS.find(c => c.name === r.cooperativeCluster);
+                            if (!cluster) return 'bg-slate-400';
+                            switch (cluster.id) {
+                              case 'financial': return 'bg-blue-500';
+                              case 'consumers_marketing': return 'bg-emerald-500';
+                              case 'human_services': return 'bg-rose-500';
+                              case 'education_advocacy': return 'bg-amber-500';
+                              case 'agriculture': return 'bg-green-600';
+                              case 'utilities': return 'bg-cyan-500';
+                              default: return 'bg-slate-400';
+                            }
+                          })()
+                        }`}></span>
+                        <div className="text-[var(--text-muted)] font-black text-[9px] uppercase truncate max-w-[150px]" title={r.cooperativeCluster || 'Uncategorized'}>
+                          {r.cooperativeCluster || 'Uncategorized'}
+                        </div>
+                      </div>
+                      {r.secondaryCooperativeCluster && (
+                        <div className="flex items-center gap-1.5 opacity-60">
+                          <span className={`w-1 h-1 rounded-full shrink-0 ${
+                            (() => {
+                              const cluster = COOPERATIVE_CLUSTERS.find(c => c.name === r.secondaryCooperativeCluster);
+                              if (!cluster) return 'bg-slate-400';
+                              switch (cluster.id) {
+                                case 'financial': return 'bg-blue-500';
+                                case 'consumers_marketing': return 'bg-emerald-500';
+                                case 'human_services': return 'bg-rose-500';
+                                case 'education_advocacy': return 'bg-amber-500';
+                                case 'agriculture': return 'bg-green-600';
+                                case 'utilities': return 'bg-cyan-500';
+                                default: return 'bg-slate-400';
+                              }
+                            })()
+                          }`}></span>
+                          <div className="text-[var(--text-muted)] font-bold text-[8px] uppercase truncate max-w-[150px]" title={r.secondaryCooperativeCluster || 'Uncategorized'}>
+                            {r.secondaryCooperativeCluster}
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </td>
                   <td className="px-6 py-4">
                     <span className={`px-2 py-1 rounded text-[10px] font-black uppercase ${
@@ -1769,6 +2895,25 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                           ))}
                         </div>
 
+                        {r.secondaryCooperativeType && (
+                          <div className="bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800/50 rounded-2xl p-6 flex flex-col md:flex-row gap-6 items-start md:items-center">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 bg-blue-100 dark:bg-blue-800 rounded-xl flex items-center justify-center text-blue-600 dark:text-blue-400">
+                                <Layers size={20} />
+                              </div>
+                              <div>
+                                <h5 className="text-[10px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest">Secondary Categorization</h5>
+                                <p className="text-sm font-black text-[var(--text-main)]">{r.secondaryCooperativeType}</p>
+                              </div>
+                            </div>
+                            <div className="hidden md:block w-px h-8 bg-blue-200 dark:bg-blue-800" />
+                            <div>
+                                <h5 className="text-[10px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest">Assigned Cluster</h5>
+                                <p className="text-sm font-bold text-[var(--text-muted)]">{r.secondaryCooperativeCluster || 'Not Classified'}</p>
+                            </div>
+                          </div>
+                        )}
+
                         <div className="flex justify-end pr-4">
                           <button 
                             onClick={() => setSelectedReport(r)}
@@ -1791,7 +2936,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   );
 
   const renderUsers = () => (
-    <div className="space-y-6 pr-4 md:pr-8 lg:pr-16">
+    <div className="space-y-6">
        <header className="flex justify-between items-end">
           <div>
             <h2 className="text-2xl font-bold text-[var(--text-main)] tracking-tight">Authority Center</h2>
@@ -1807,6 +2952,30 @@ export default function Dashboard({ user, token, onLogout }: Props) {
        </header>
 
        <AnimatePresence>
+         {emailStatus && !emailStatus.isReady && (
+           <motion.div 
+             initial={{ opacity: 0, y: -10 }}
+             animate={{ opacity: 1, y: 0 }}
+             className="mb-6 bg-red-50 dark:bg-red-900/10 border border-red-200 dark:border-red-900/30 p-4 rounded-2xl flex flex-col md:flex-row items-center justify-between gap-4 transition-all hover:border-red-300"
+           >
+             <div className="flex items-center gap-3">
+               <div className="w-10 h-10 bg-red-100 dark:bg-red-900/30 rounded-xl flex items-center justify-center text-red-600 dark:text-red-400 shrink-0">
+                 <ShieldAlert size={20} />
+               </div>
+               <div>
+                 <h4 className="text-[11px] font-black text-red-800 dark:text-red-300 uppercase tracking-widest">Email Service Offline</h4>
+                 <p className="text-[11px] text-red-700 dark:text-red-400 font-medium italic">{emailStatus.helpMessage || emailStatus.lastError || 'SMTP connection failed'}</p>
+               </div>
+             </div>
+             <button 
+               onClick={() => setActiveTab('settings')}
+               className="w-full md:w-auto px-5 py-2 bg-red-600 text-white text-[10px] font-black uppercase tracking-widest rounded-xl hover:bg-red-700 transition-all shadow-lg shadow-red-600/20"
+             >
+               Configure Credentials
+             </button>
+           </motion.div>
+         )}
+
          {createdUserTempPass && (
            <motion.div 
              initial={{ opacity: 0, scale: 0.95 }}
@@ -2056,6 +3225,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
         <nav className="flex-1 space-y-2 overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-white/5">
           <SidebarItem icon={LayoutDashboard} label="Dashboard" id="dashboard" active={activeTab === 'dashboard'} />
           <SidebarItem icon={FileText} label="Report Repository" id="reports" active={activeTab === 'reports'} />
+          <SidebarItem icon={Wrench} label="Report Builder" id="builder" active={activeTab === 'builder'} />
           {user?.role === UserRole.ADMIN && (
             <>
               <SidebarItem icon={Users} label="Operator Registry" id="users" active={activeTab === 'users'} />
@@ -2111,7 +3281,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
         </div>
       </aside>
 
-      <main className="flex-1 overflow-y-auto p-4 sm:p-6 md:p-8 lg:p-12 relative h-full">
+      <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 relative h-full">
         {/* Mobile Header */}
         <div className="lg:hidden flex items-center justify-between mb-8 sticky top-0 bg-[var(--bg)]/80 backdrop-blur-md z-40 py-2 transition-colors">
            <button 
@@ -2283,6 +3453,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
           >
             {activeTab === 'dashboard' && renderDashboard()}
             {activeTab === 'reports' && renderReports()}
+            {activeTab === 'builder' && renderBuilder()}
             {user?.role === UserRole.ADMIN && (
               <>
                 {activeTab === 'users' && renderUsers()}
@@ -2530,8 +3701,40 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                   <div className="grid grid-cols-2 gap-6 bg-[var(--card)] p-6 rounded-2xl border border-[var(--border)] shadow-sm transition-colors">
                     <div>
                       <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">Cooperative Type</label>
-                      <div className="text-xs font-bold text-[var(--text-main)]">{selectedReport.parsedData?.["Cooperative Type"] || 'N/A'}</div>
+                      {user?.role !== UserRole.VIEWER ? (
+                        <select 
+                          value={cooperativeTypeEdit}
+                          onChange={(e) => setCooperativeTypeEdit(e.target.value)}
+                          className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-2 py-1.5 text-[11px] font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-all appearance-none"
+                        >
+                          <option value="">Select Type</option>
+                          {ALL_COOP_TYPES.map(type => (
+                            <option key={type} value={type}>{type}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="text-xs font-bold text-[var(--text-main)]">{selectedReport.cooperativeType || selectedReport.parsedData?.["Cooperative Type"] || 'N/A'}</div>
+                      )}
                     </div>
+                    {cooperativeTypeEdit === 'Multipurpose' && (
+                       <div>
+                         <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">Specific Cooperative Type</label>
+                         {user?.role !== UserRole.VIEWER ? (
+                           <select 
+                             value={specificType}
+                             onChange={(e) => setSpecificType(e.target.value)}
+                             className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-2 py-1.5 text-[11px] font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-all appearance-none"
+                           >
+                             <option value="">Select Specific Type</option>
+                             {ALL_COOP_TYPES.filter(t => t !== 'Multipurpose').map(type => (
+                               <option key={type} value={type}>{type}</option>
+                             ))}
+                           </select>
+                         ) : (
+                           <div className="text-xs font-bold text-[var(--text-main)]">{selectedReport.specificType || 'N/A'}</div>
+                         )}
+                       </div>
+                    )}
                     <div>
                       <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">Category</label>
                       <div className="text-xs font-bold text-[var(--text-main)]">{selectedReport.parsedData?.["Category"] || 'N/A'}</div>
@@ -2543,6 +3746,26 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                     <div>
                       <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">Asset Size 2026 (Projected)</label>
                       <div className="text-xs font-mono font-bold text-[var(--text-main)]">{selectedReport.parsedData?.["Asset Size 2026"] ? `₱${Number(selectedReport.parsedData["Asset Size 2026"]).toLocaleString()}` : 'N/A'}</div>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1">Cooperative Cluster</label>
+                      <div className="text-xs font-bold text-blue-600 dark:text-blue-400">
+                        {(() => {
+                           let type = cooperativeTypeEdit;
+                           if (type === 'Multipurpose' && specificType) {
+                             type = specificType;
+                           }
+                           
+                           if (!type) return selectedReport.cooperativeCluster || 'Auto-assigned';
+                           
+                           for (const cluster of COOPERATIVE_CLUSTERS) {
+                             if (cluster.types.some(t => t.toLowerCase() === type.toLowerCase())) {
+                               return cluster.name;
+                             }
+                           }
+                           return 'Others';
+                        })()}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -2590,13 +3813,37 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                     </div>
 
                     <div className="mt-4">
-                      <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-2">Validation Message / Evaluation Remarks</label>
+                      <div className="flex items-center justify-between mb-2">
+                        <label className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest">Validation Message / Evaluation Remarks</label>
+                        {user?.role !== UserRole.VIEWER && (
+                          <button 
+                            onClick={handleAiSuggestMain}
+                            disabled={isAiThinking === 'main'}
+                            className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition-all text-[10px] font-black uppercase tracking-widest disabled:opacity-50 disabled:cursor-not-allowed shadow-md shadow-blue-500/20"
+                          >
+                            {isAiThinking === 'main' ? (
+                              <Loader2 size={12} className="animate-spin" />
+                            ) : (
+                              <Sparkles size={12} />
+                            )}
+                            Synthesize with AI
+                          </button>
+                        )}
+                      </div>
                       {user?.role !== UserRole.VIEWER ? (
                         <textarea 
                           value={evaluationRemarks}
-                          onChange={(e) => setEvaluationRemarks(e.target.value)}
+                          onChange={(e) => {
+                            setEvaluationRemarks(e.target.value);
+                            e.target.style.height = 'auto';
+                            e.target.style.height = `${e.target.scrollHeight}px`;
+                          }}
+                          onFocus={(e) => {
+                            e.target.style.height = 'auto';
+                            e.target.style.height = `${e.target.scrollHeight}px`;
+                          }}
                           placeholder="Enter validation message or evaluation remarks for this record..."
-                          className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-500 transition-all min-h-[100px] text-[var(--text-main)]"
+                          className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-xl px-4 py-3 text-sm outline-none focus:border-blue-500 transition-all min-h-[100px] text-[var(--text-main)] resize-none overflow-hidden"
                         />
                       ) : (
                         <div className="w-full bg-blue-50/50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-800 rounded-xl px-4 py-3 text-sm text-[var(--text-main)] min-h-[60px] italic">
@@ -2604,6 +3851,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                         </div>
                       )}
                     </div>
+
                   </div>
 
                   {/* Unified Document Checklist & Findings */}
@@ -2695,8 +3943,8 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                             { id: 'AFS', label: 'Audited Financial Statement', short: 'AFS', findingsKey: 'Summary of findings_5' },
                             { id: 'SAR', label: 'Social Audit Report', short: 'SAR', findingsKey: 'Summary of findings_2' },
                             { id: 'PAR', label: 'Performance Audit Report', short: 'PAR', findingsKey: 'Summary of findings_3' },
-                            { id: 'MEDCON', label: 'Mediation and Conciliation', short: 'MEDCON', findingsKey: 'Summary of findings_4' },
                             { id: 'SWORN STATEMENT AFFIDAVIT', label: 'Sworn Statement', short: 'SWORN', findingsKey: 'Summary of findings_6' },
+                            { id: 'MEDCON', label: 'Mediation and Conciliation', short: 'MEDCON', findingsKey: 'Summary of findings_4' },
                           ].map((doc) => {
                             const data = documentFindings[doc.id] || { value: 'Not Complying', findings: 'No specific findings documented.' };
                             const isComplying = data.value?.toLowerCase().includes('comply') && !data.value?.toLowerCase().includes('not');
@@ -2753,15 +4001,39 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                                 </div>
                                 
                                 <div className="mt-3 pl-9">
-                                  <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-2 flex items-center gap-2">
-                                    <FileText size={10} className="text-blue-500" />
-                                    Summary of Findings
+                                  <div className="text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-wider mb-2 flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-2">
+                                      <FileText size={10} className="text-blue-500" />
+                                      Summary of Findings
+                                    </div>
+                                    {user?.role !== UserRole.VIEWER && (
+                                      <button 
+                                        onClick={() => handleAiSuggest(doc.id, doc.label)}
+                                        disabled={isAiThinking === doc.id}
+                                        className="flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 border border-blue-100 dark:border-blue-800 hover:bg-blue-100 dark:hover:bg-blue-900/50 transition-all text-[9.5px] font-black uppercase tracking-tighter cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed group/btn"
+                                      >
+                                        {isAiThinking === doc.id ? (
+                                          <Loader2 size={10} className="animate-spin" />
+                                        ) : (
+                                          <Sparkles size={10} className="group-hover/btn:scale-125 transition-transform" />
+                                        )}
+                                        AI Suggest
+                                      </button>
+                                    )}
                                   </div>
                                   {user?.role !== UserRole.VIEWER ? (
                                     <textarea 
                                       value={data.findings}
-                                      onChange={(e) => handleFindingsChange(e.target.value)}
-                                      className="w-full p-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-[12px] text-[var(--text-main)] leading-relaxed outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 transition-all min-h-[60px] resize-none"
+                                      onChange={(e) => {
+                                        handleFindingsChange(e.target.value);
+                                        e.target.style.height = 'auto';
+                                        e.target.style.height = `${e.target.scrollHeight}px`;
+                                      }}
+                                      onFocus={(e) => {
+                                        e.target.style.height = 'auto';
+                                        e.target.style.height = `${e.target.scrollHeight}px`;
+                                      }}
+                                      className="w-full p-3 bg-[var(--card)] border border-[var(--border)] rounded-lg text-[12px] text-[var(--text-main)] leading-relaxed outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500/20 transition-all min-h-[60px] resize-none overflow-hidden"
                                       placeholder="Add specific findings or notes..."
                                     />
                                   ) : (
@@ -2773,6 +4045,81 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                               </div>
                             );
                           })}
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-6">
+                          <div className="p-4 bg-[var(--card)] border border-[var(--border)] rounded-xl shadow-sm">
+                            <label className="block text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest mb-3 flex items-center gap-2">
+                              <Eye size={12} className="text-blue-500" />
+                              Date Inspected
+                            </label>
+                            {user?.role !== UserRole.VIEWER ? (
+                              <input 
+                                type="date"
+                                value={dateInspected}
+                                onChange={(e) => setDateInspected(e.target.value)}
+                                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2 text-[12px] font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-all"
+                              />
+                            ) : (
+                              <div className="text-[12px] font-bold text-[var(--text-main)]">{dateInspected || 'N/A'}</div>
+                            )}
+                          </div>
+
+                          <div className="p-4 bg-[var(--card)] border border-[var(--border)] rounded-xl shadow-sm">
+                            <label className="block text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest mb-3 flex items-center gap-2">
+                              <ShieldCheck size={12} className="text-blue-500" />
+                              Inspection Status
+                            </label>
+                            {user?.role !== UserRole.VIEWER ? (
+                              <select 
+                                value={inspectionStatus}
+                                onChange={(e) => setInspectionStatus(e.target.value)}
+                                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2 text-[12px] font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-all appearance-none"
+                              >
+                                <option value="">Select Status</option>
+                                <option value="Complied">Complied</option>
+                                <option value="Not Complied">Not Complied</option>
+                                <option value="Subject for Inspection">Subject for Inspection</option>
+                                <option value="Inspection Ongoing">Inspection Ongoing</option>
+                              </select>
+                            ) : (
+                              <div className="text-[12px] font-bold text-[var(--text-main)]">{inspectionStatus || 'N/A'}</div>
+                            )}
+                          </div>
+
+                          <div className="p-4 bg-[var(--card)] border border-[var(--border)] rounded-xl shadow-sm">
+                            <label className="block text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest mb-3 flex items-center gap-2">
+                              <FileText size={12} className="text-blue-500" />
+                              Date Issued/Recommended
+                            </label>
+                            {user?.role !== UserRole.VIEWER ? (
+                              <input 
+                                type="date"
+                                value={dateIssuedRecommended}
+                                onChange={(e) => setDateIssuedRecommended(e.target.value)}
+                                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2 text-[12px] font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-all"
+                              />
+                            ) : (
+                              <div className="text-[12px] font-bold text-[var(--text-main)]">{dateIssuedRecommended || 'N/A'}</div>
+                            )}
+                          </div>
+
+                          <div className="p-4 bg-[var(--card)] border border-[var(--border)] rounded-xl shadow-sm">
+                            <label className="block text-[10px] font-black text-[var(--text-muted)] uppercase tracking-widest mb-3 flex items-center gap-2">
+                              <CheckCircle2 size={12} className="text-blue-500" />
+                              Date complied to OTC and SCO
+                            </label>
+                            {user?.role !== UserRole.VIEWER ? (
+                              <input 
+                                type="date"
+                                value={dateCompliedToOTCandSCO}
+                                onChange={(e) => setDateCompliedToOTCandSCO(e.target.value)}
+                                className="w-full bg-[var(--bg)] border border-[var(--border)] rounded-lg px-3 py-2 text-[12px] font-bold text-[var(--text-main)] outline-none focus:border-blue-500 transition-all"
+                              />
+                            ) : (
+                              <div className="text-[12px] font-bold text-[var(--text-main)]">{dateCompliedToOTCandSCO || 'N/A'}</div>
+                            )}
+                          </div>
                         </div>
                       </motion.div>
                     )}
@@ -2943,6 +4290,14 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                  </div>
                  <div className="flex flex-wrap gap-3 w-full md:w-auto justify-center">
                    <button 
+                    onClick={() => generateEvaluationReport(selectedReport, user)}
+                    className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-sm hover:bg-slate-200 dark:hover:bg-slate-700 transition-all flex items-center gap-2"
+                    title="Generate Evaluation PDF"
+                   >
+                     <FileText size={18} />
+                     Export PDF
+                   </button>
+                   <button 
                     onClick={() => {
                       const dataStr = JSON.stringify(selectedReport, null, 2);
                       navigator.clipboard.writeText(dataStr);
@@ -3107,6 +4462,10 @@ export default function Dashboard({ user, token, onLogout }: Props) {
             </motion.div>
           </div>
         )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {isAddingCoop && renderAddCoopModal()}
       </AnimatePresence>
     </div>
   );

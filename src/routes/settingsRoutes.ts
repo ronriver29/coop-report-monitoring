@@ -5,7 +5,30 @@ import type { AuthRequest } from '../middleware/auth.ts';
 import { UserRole } from '../constants.ts';
 import { logAction } from '../services/auditService.ts';
 
+import { getEmailStatus, verifyEmailConfig } from '../services/emailService.ts';
+
 const router = express.Router();
+
+// Get email service status (restricted to ADMIN)
+router.get('/email-status', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
+  try {
+    const status = getEmailStatus();
+    res.json(status);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching email status' });
+  }
+});
+
+// Trigger a re-verification (restricted to ADMIN)
+router.post('/email-verify', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
+  try {
+    const success = await verifyEmailConfig();
+    const status = getEmailStatus();
+    res.json({ success, status });
+  } catch (error) {
+    res.status(500).json({ message: 'Error verifying email' });
+  }
+});
 
 // Get all settings (restricted to ADMIN)
 router.get('/', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {

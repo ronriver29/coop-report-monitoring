@@ -16,13 +16,22 @@ export default function App() {
     // Check for token in URL (after redirect)
     const params = new URLSearchParams(window.location.search);
     const urlToken = params.get('token');
+    const isExpiredInUrl = params.get('expired') === 'true';
     
-    if (urlToken) {
-      localStorage.setItem('cda_token', urlToken);
-      setToken(urlToken);
-      // Clean URL
-      const base = import.meta.env.BASE_URL || '/';
-      window.history.replaceState({}, document.title, base);
+    if (urlToken || isExpiredInUrl) {
+      if (urlToken) {
+        localStorage.setItem('cda_token', urlToken);
+        setToken(urlToken);
+      }
+      
+      // Clean URL after a short delay so children (Login) can read initial state
+      setTimeout(() => {
+        const base = import.meta.env.BASE_URL || '/';
+        const cleanUrl = window.location.pathname === base || window.location.pathname === '/' 
+          ? base 
+          : window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+      }, 500);
     }
 
     // Handle message from popup

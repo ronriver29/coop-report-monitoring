@@ -5,11 +5,27 @@ import Report from '../models/Report.ts';
 import { AuditLog } from '../models/AuditLog.ts';
 import { protect, restrictTo } from '../middleware/auth.ts';
 import type { AuthRequest } from '../middleware/auth.ts';
-import { UserRole, PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES } from '../constants.ts';
+import { UserRole, PHILIPPINE_REGIONS, PHILIPPINE_PROVINCES, COOPERATIVE_CLUSTERS } from '../constants.ts';
 import { logAction } from '../services/auditService.ts';
 import { createNotification, notifyAdmins } from '../services/notificationService.ts';
 
 const router = express.Router();
+
+const getCluster = (coopType: string, specificType?: string) => {
+  if (!coopType) return 'Others';
+  
+  let targetType = coopType.trim();
+  if (targetType.toLowerCase() === 'multipurpose' && specificType) {
+    targetType = specificType.trim();
+  }
+
+  for (const cluster of COOPERATIVE_CLUSTERS) {
+     if (cluster.types.some(t => t.toLowerCase() === targetType.toLowerCase())) {
+       return cluster.name;
+     }
+  }
+  return 'Others';
+};
 
 console.log('✅ Report routes initialized');
 
@@ -68,6 +84,54 @@ router.patch('/:id/status', protect, restrictTo(UserRole.ADMIN, UserRole.ANALYST
 
 /**
  * @swagger
+ * /api/reports:
+ *   post:
+ *     summary: Create a new report record manually
+ *     tags: [Reports]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post('/', protect, restrictTo(UserRole.ADMIN, UserRole.ANALYST, UserRole.REGIONAL_ANALYST), async (req: AuthRequest, res) => {
+  try {
+    const user = req.user!;
+    const reportData = req.body;
+
+    if (!reportData.cooperativeName || !reportData.registrationNumber) {
+      return res.status(400).json({ message: 'Cooperative Name and Registration Number are required' });
+    }
+
+    // Calculate cluster if not provided but coop type exists
+    if (!reportData.cooperativeCluster && reportData.cooperativeType) {
+        reportData.cooperativeCluster = getCluster(reportData.cooperativeType, reportData.specificType);
+    }
+
+    const report = new Report({
+      ...reportData,
+      submissionDate: reportData.submissionDate || new Date(),
+      status: reportData.status || 'Pending',
+      uploadedBy: user._id,
+      reportType: reportData.reportType || 'Annual Report'
+    });
+
+    await report.save();
+
+    await logAction(
+      user._id.toString(),
+      'REPORT_CREATED',
+      `Manually created report for ${report.cooperativeName}`,
+      'REPORT',
+      report._id.toString()
+    );
+
+    res.status(201).json({ message: 'Cooperative record created successfully', report });
+  } catch (error) {
+    console.error('Create report error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/**
+ * @swagger
  * /api/reports/:id:
  *   patch:
  *     summary: Update report details
@@ -78,8 +142,21 @@ router.patch('/:id/status', protect, restrictTo(UserRole.ADMIN, UserRole.ANALYST
 router.patch('/:id', protect, restrictTo(UserRole.ADMIN, UserRole.ANALYST, UserRole.REGIONAL_ANALYST), async (req: AuthRequest, res) => {
   try {
     const reportId = req.params.id;
-    const { complianceStatus, complianceDate, evaluationRemarks, status, parsedData } = req.body;
-
+    const { 
+      complianceStatus, 
+      complianceDate, 
+      evaluationRemarks, 
+      status, 
+      parsedData, 
+      dateInspected, 
+      inspectionStatus, 
+      dateIssuedRecommended, 
+      dateCompliedToOTCandSCO,
+      cooperativeType,
+      specificType,
+      cooperativeCluster 
+    } = req.body;
+ 
     const updateData: any = {};
     if (complianceStatus !== undefined) {
       updateData.complianceStatus = complianceStatus;
@@ -92,6 +169,31 @@ router.patch('/:id', protect, restrictTo(UserRole.ADMIN, UserRole.ANALYST, UserR
     if (evaluationRemarks !== undefined) updateData.evaluationRemarks = evaluationRemarks;
     if (status !== undefined) updateData.status = status;
     if (parsedData !== undefined) updateData.parsedData = parsedData;
+    if (dateInspected !== undefined) updateData.dateInspected = dateInspected;
+    if (inspectionStatus !== undefined) updateData.inspectionStatus = inspectionStatus;
+    if (dateIssuedRecommended !== undefined) updateData.dateIssuedRecommended = dateIssuedRecommended;
+    if (dateCompliedToOTCandSCO !== undefined) updateData.dateCompliedToOTCandSCO = dateCompliedToOTCandSCO;
+    if (cooperativeType !== undefined) updateData.cooperativeType = cooperativeType;
+    if (specificType !== undefined) updateData.specificType = specificType;
+    
+    // Auto-update cluster if type or specificType is changed
+    if (cooperativeType !== undefined || specificType !== undefined) {
+      const currentReport = await Report.findById(reportId);
+      if (currentReport) {
+        const finalType = cooperativeType !== undefined ? cooperativeType : currentReport.cooperativeType;
+        let finalSpecific = specificType !== undefined ? specificType : currentReport.specificType;
+        
+        // If changing to a non-multipurpose type, clear specificType
+        if (finalType && finalType.toLowerCase() !== 'multipurpose') {
+          finalSpecific = '';
+          updateData.specificType = '';
+        }
+        
+        updateData.cooperativeCluster = getCluster(finalType || '', finalSpecific);
+      }
+    } else if (cooperativeCluster !== undefined) {
+      updateData.cooperativeCluster = cooperativeCluster;
+    }
 
     const report = await Report.findByIdAndUpdate(
       reportId,
@@ -231,6 +333,7 @@ router.post('/ingest', protect, restrictTo(UserRole.ADMIN, UserRole.ANALYST, Use
         const rawRegion = getVal('region', ['Region Code', 'Region', 'Regional Office']) || user.region;
         const province = getVal('province', ['Province']);
         const reportType = getVal('reportType', ['Cooperative Type', 'Type']) || 'General';
+        const specificType = getVal('specificType', ['Specific Type', 'Specific Cooperative Type']);
         
         const statusDetails = getVal('statusDetails', ['Status Details']);
         const rawStatus = getVal('status', ['Status']); // Already handled above as 'status' but just to be sure
@@ -266,6 +369,8 @@ router.post('/ingest', protect, restrictTo(UserRole.ADMIN, UserRole.ANALYST, Use
           street: street,
           category: category,
           cooperativeType: String(reportType).trim(),
+          specificType: specificType ? String(specificType).trim() : undefined,
+          cooperativeCluster: getCluster(String(reportType), specificType ? String(specificType) : undefined),
           assetSize2025: assetSize2025,
           assetSize2026: assetSize2026,
           statusOfCompliance: statusOfCompliance,
@@ -316,11 +421,12 @@ router.get('/export', protect, async (req: AuthRequest, res) => {
   try {
     const user = req.user!;
     let query: any = {};
-    const { status, complianceStatus, cooperativeType, region, province, sortBy, sortOrder, search } = req.query;
+    const { status, complianceStatus, cooperativeType, cooperativeCluster, region, province, sortBy, sortOrder, search } = req.query;
 
     if (status) query.status = status;
     if (complianceStatus) query.complianceStatus = complianceStatus;
     if (cooperativeType) query.cooperativeType = cooperativeType;
+    if (cooperativeCluster) query.cooperativeCluster = cooperativeCluster;
     
     // Robust region filtering logic
     let regionFilter: any = null;
@@ -412,6 +518,10 @@ router.get('/export', protect, async (req: AuthRequest, res) => {
         'Main Status': report.status,
         'Compliance Status': report.complianceStatus || 'N/A',
         'Compliance Date': report.complianceDate ? new Date(report.complianceDate).toLocaleDateString() : 'N/A',
+        'Date Inspected': report.dateInspected ? new Date(report.dateInspected).toLocaleDateString() : 'N/A',
+        'Inspection Status': report.inspectionStatus || 'N/A',
+        'Date Issued/Recommended': report.dateIssuedRecommended ? new Date(report.dateIssuedRecommended).toLocaleDateString() : 'N/A',
+        'Date Complied to OTC/SCO': report.dateCompliedToOTCandSCO ? new Date(report.dateCompliedToOTCandSCO).toLocaleDateString() : 'N/A',
         'Days Delayed': daysDelayed,
         'Penalty Amount': penaltyAmount.toFixed(2),
         'Uploaded By': (report.uploadedBy as any)?.displayName || (report.uploadedBy as any)?.email || 'System'
@@ -451,11 +561,12 @@ router.get('/', protect, async (req: AuthRequest, res) => {
     const skip = (page - 1) * limit;
 
     let query: any = {};
-    const { status, complianceStatus, cooperativeType, region, province, sortBy, sortOrder, search } = req.query;
+    const { status, complianceStatus, cooperativeType, cooperativeCluster, region, province, sortBy, sortOrder, search } = req.query;
 
     if (status) query.status = status;
     if (complianceStatus) query.complianceStatus = complianceStatus;
     if (cooperativeType) query.cooperativeType = cooperativeType;
+    if (cooperativeCluster) query.cooperativeCluster = cooperativeCluster;
     
     // Robust region filtering logic
     let regionFilter: any = null;
@@ -610,6 +721,136 @@ router.get('/', protect, async (req: AuthRequest, res) => {
     });
   } catch (error) {
     console.error('Fetch reports error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+});
+
+/**
+ * @swagger
+ * /api/reports/stats:
+ *   get:
+ *     summary: Get aggregate stats for reports matching filters
+ *     tags: [Reports]
+ */
+/**
+ * @swagger
+ * /api/reports/maintenance/sync-clusters:
+ *   post:
+ *     summary: Re-apply clustering to all reports based on their type
+ *     tags: [Reports]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post('/maintenance/sync-clusters', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
+  try {
+    const reports = await Report.find({});
+    let updatedCount = 0;
+
+    for (const report of reports) {
+      const newCluster = getCluster(report.cooperativeType || '', report.specificType);
+      if (report.cooperativeCluster !== newCluster) {
+        report.cooperativeCluster = newCluster;
+        await report.save();
+        updatedCount++;
+      }
+    }
+
+    await logAction(
+      req.user!._id.toString(),
+      'MAINTENANCE_SYNC_CLUSTERS',
+      `Synchronized clusters for ${updatedCount} reports`,
+      'SYSTEM'
+    );
+
+    res.json({ message: `Successfully updated ${updatedCount} reports`, total: reports.length });
+  } catch (error) {
+    console.error('Maintenance sync error:', error);
+    res.status(500).json({ message: 'Server error during maintenance sync' });
+  }
+});
+
+router.get('/stats', protect, async (req: AuthRequest, res) => {
+  try {
+    const user = req.user!;
+    let query: any = {};
+    const { status, complianceStatus, cooperativeType, cooperativeCluster, region, province, search } = req.query;
+
+    if (status) query.status = status;
+    if (complianceStatus) query.complianceStatus = complianceStatus;
+    if (cooperativeType) query.cooperativeType = cooperativeType;
+    if (cooperativeCluster) query.cooperativeCluster = cooperativeCluster;
+    
+    let regionFilter: any = null;
+    if (user.role === UserRole.REGIONAL_ANALYST) {
+      if (!user.region) return res.status(403).json({ message: 'Regional assignment required' });
+      const regionInfo = PHILIPPINE_REGIONS.find(r => r.id === user.region || r.code === user.region);
+      if (regionInfo) {
+        const plainName = regionInfo.name.split(' (')[0];
+        regionFilter = { $or: [ { region: regionInfo.id }, { region: regionInfo.code }, { region: plainName }, { region: { $regex: `^${plainName.replace('.', '\\.')}$`, $options: 'i' } } ] };
+      } else { regionFilter = { region: user.region }; }
+    } else if (region) {
+      const regionInfo = PHILIPPINE_REGIONS.find(r => r.id === region || r.code === region);
+      if (regionInfo) {
+        const plainName = regionInfo.name.split(' (')[0];
+        regionFilter = { $or: [ { region: regionInfo.id }, { region: regionInfo.code }, { region: plainName }, { region: { $regex: `^${plainName.replace('.', '\\.')}$`, $options: 'i' } } ] };
+      } else { regionFilter = { region: region }; }
+    }
+    if (regionFilter) query = { ...query, ...regionFilter };
+    if (province) {
+      const provinceInfo = PHILIPPINE_PROVINCES.find(p => p.id === province || p.name === province);
+      if (provinceInfo) {
+        const provinceOr = [ { province: provinceInfo.id }, { province: provinceInfo.name }, { province: { $regex: `^${provinceInfo.name.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')}$`, $options: 'i' } } ];
+        if (query.$or) {
+           const existingOr = query.$or; delete query.$or;
+           query.$and = [{ $or: existingOr }, { $or: provinceOr }];
+        } else { query.$or = provinceOr; }
+      } else { query.province = province; }
+    }
+    if (search) {
+      const searchFilter = { $or: [ { cooperativeName: { $regex: search, $options: 'i' } }, { registrationNumber: { $regex: search, $options: 'i' } } ] };
+      if (query.$or) {
+        const existingOr = query.$or; delete query.$or;
+        query.$and = [{ $or: existingOr }, searchFilter];
+      } else { query = { ...query, ...searchFilter }; }
+    }
+
+    const complianceStats = await Report.aggregate([
+      { $match: query },
+      { $group: { _id: '$complianceStatus', value: { $sum: 1 } } },
+      { $project: { name: { $ifNull: ['$_id', 'No Status'] }, value: 1, _id: 0 } }
+    ]);
+
+    const clusterStats = await Report.aggregate([
+      { $match: query },
+      { $group: { _id: '$cooperativeCluster', value: { $sum: 1 } } },
+      { $sort: { value: -1 } },
+      { $project: { name: { $ifNull: ['$_id', 'Uncategorized'] }, value: 1, _id: 0 } }
+    ]);
+
+    const regionStats = await Report.aggregate([
+      { $match: query },
+      { $group: { _id: '$region', value: { $sum: 1 } } },
+      { $sort: { value: -1 } },
+      { $limit: 10 },
+      { $project: { regionId: '$_id', value: 1, _id: 0 } }
+    ]);
+
+    // Map region IDs to names
+    const mappedRegionStats = regionStats.map(stat => {
+      const regionInfo = PHILIPPINE_REGIONS.find(r => r.id === stat.regionId || r.code === stat.regionId);
+      return {
+        name: regionInfo ? regionInfo.name.split(' (')[0] : stat.regionId || 'Unknown',
+        value: stat.value
+      };
+    });
+
+    res.json({
+      complianceStats,
+      clusterStats,
+      regionStats: mappedRegionStats
+    });
+  } catch (error) {
+    console.error('Stats error:', error);
     res.status(500).json({ message: 'Server error' });
   }
 });

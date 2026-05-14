@@ -112,3 +112,71 @@ export const UserRole = {
 } as const;
 
 export type UserRole = typeof UserRole[keyof typeof UserRole];
+
+export const COOPERATIVE_CLUSTERS = [
+  {
+    id: 'financial',
+    name: 'Credit and Financial Services, Banking, Credit Surety Fund and Insurance',
+    types: ['Credit', 'Cooperative Bank', 'Financial Service', 'Insurance', 'Credit Surety Fund (CSF)', 'Banking', 'Credit Surety Fund']
+  },
+  {
+    id: 'consumers_marketing',
+    name: 'Consumers, Marketing, Producers, and Logistics',
+    types: ['Consumers', 'Producers', 'Marketing', 'Logistics']
+  },
+  {
+    id: 'human_services',
+    name: 'Human Services: Health, Housing, Workers, and Labor Service',
+    types: ['Health Services Cooperative', 'Housing', 'Workers', 'Labor Service', 'Health', 'Labor']
+  },
+  {
+    id: 'education_advocacy',
+    name: 'Education and Advocacy',
+    types: ['Education', 'Advocacy', 'Union']
+  },
+  {
+    id: 'agriculture',
+    name: 'Agriculture, Agrarian, Aquaculture, Farmers, Dairy, and Fisherfolk',
+    types: ['Agriculture', 'Agrarian Reform', 'Dairy', 'Fisherman', 'Fisherfolk', 'Farmers', 'Aquaculture', 'Agrarian']
+  },
+  {
+    id: 'utilities',
+    name: 'Public Utilities: Electricity, Water, Communications, and Transport',
+    types: ['Electric', 'Water Service', 'Transport', 'Electricity', 'Water', 'Communications']
+  }
+];
+
+export const ALL_COOP_TYPES = [
+  'Credit',
+  'Cooperative Bank',
+  'Financial Service',
+  'Insurance',
+  'Credit Surety Fund (CSF)',
+  'Consumers',
+  'Producers',
+  'Marketing',
+  'Logistics',
+  'Health Services Cooperative',
+  'Housing',
+  'Workers',
+  'Labor Service',
+  'Education',
+  'Advocacy',
+  'Union',
+  'Agriculture',
+  'Agrarian Reform',
+  'Dairy',
+  'Fisherman',
+  'Electric',
+  'Water Service',
+  'Transport',
+  'Multipurpose',
+  'Fisherfolk',
+  'Farmers',
+  'Aquaculture',
+  'Electricity',
+  'Water',
+  'Communications',
+  'Banking',
+  'Agrarian'
+];

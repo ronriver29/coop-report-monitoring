@@ -21,6 +21,10 @@ export interface Report {
   submissionDate: string;
   status: string;
   region?: string; // Region where the report belongs
+  dateInspected?: string;
+  inspectionStatus?: string;
+  dateIssuedRecommended?: string;
+  dateCompliedToOTCandSCO?: string;
   createdAt: string;
   uploadedBy: string | { displayName: string; region?: string };
 }

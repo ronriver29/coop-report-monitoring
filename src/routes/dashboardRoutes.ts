@@ -16,8 +16,11 @@ const router = express.Router();
 router.get('/stats', protect, async (req: AuthRequest, res) => {
   try {
     const user = req.user!;
-    const { region, province } = req.query;
+    const { region, province, cooperativeType, cooperativeCluster } = req.query;
     let query: any = {};
+
+    if (cooperativeType) query.cooperativeType = cooperativeType;
+    if (cooperativeCluster) query.cooperativeCluster = cooperativeCluster;
 
     // Robust region filtering logic for shared stats querying
     let regionFilter: any = null;

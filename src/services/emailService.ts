@@ -8,24 +8,41 @@ let transporter: nodemailer.Transporter | null = null;
 const getTransporter = () => {
   if (transporter) return transporter;
 
-  const emailUser = process.env.EMAIL_USER;
-  const emailPass = process.env.EMAIL_PASS;
-  const emailFrom = process.env.EMAIL_FROM || emailUser;
-  const host = process.env.EMAIL_HOST;
-  const portString = process.env.EMAIL_PORT;
+  const cleanSecret = (val: string | undefined, key: string) => {
+    let s = (val || '').trim();
+    // Remove surroundings quotes
+    s = s.replace(/^["']|["']$/g, '');
+    // Remove accidental "KEY=" prefix if user pasted the whole line
+    if (s.startsWith(`${key}=`)) {
+      s = s.substring(key.length + 1);
+    }
+    // Final trim in case of "KEY= VALUE"
+    return s.trim();
+  };
+
+  const emailUser = cleanSecret(process.env.EMAIL_USER, 'EMAIL_USER');
+  const emailPass = cleanSecret(process.env.EMAIL_PASS, 'EMAIL_PASS');
+  const emailFrom = cleanSecret(process.env.EMAIL_FROM, 'EMAIL_FROM') || emailUser;
+  const host = cleanSecret(process.env.EMAIL_HOST, 'EMAIL_HOST');
+  const portString = cleanSecret(process.env.EMAIL_PORT, 'EMAIL_PORT');
   const port = parseInt(portString || '587');
-  const service = process.env.EMAIL_SERVICE;
+  const service = cleanSecret(process.env.EMAIL_SERVICE, 'EMAIL_SERVICE');
 
   console.log('--- SMTP CONFIGURATION DEBUG ---');
-  console.log(`EMAIL_HOST: "${host}"`);
-  console.log(`EMAIL_PORT: "${portString}" -> ${port}`);
-  console.log(`EMAIL_SERVICE: "${service}"`);
-  console.log(`EMAIL_USER: "${emailUser}"`);
+  console.log(`EMAIL_HOST: "${host || 'NOT SET'}"`);
+  console.log(`EMAIL_PORT: "${portString || 'NOT SET'}" -> ${port}`);
+  console.log(`EMAIL_SERVICE: "${service || 'NOT SET'}"`);
+  console.log(`EMAIL_USER: "${emailUser}" (Length: ${emailUser.length})`);
   console.log(`EMAIL_FROM: "${emailFrom}"`);
+  console.log(`PASS_PROVIDED: ${emailPass ? 'YES' : 'NO'} (Length: ${emailPass.length})`);
+  
+  if (emailPass && emailPass.length < 4) {
+    console.warn('⚠️ WARNING: EMAIL_PASS is unusually short. Check your secrets.');
+  }
   console.log('---------------------------------');
 
-  if (!emailUser || !emailPass) {
-    console.warn('[SMTP INFO] Skipping transporter initialization: EMAIL_USER or EMAIL_PASS missing.');
+  if (!emailUser || !emailPass || emailUser === 'your-email@gmail.com' || emailUser.includes('example.com')) {
+    console.warn('[SMTP INFO] Skipping transporter initialization: Credentials are missing or appear to be placeholders.');
     return null;
   }
 
@@ -34,83 +51,102 @@ const getTransporter = () => {
       user: emailUser,
       pass: emailPass,
     },
+    // Enable debugging for failed authentication
+    debug: true,
+    logger: true,
   };
 
   // STRATEGY SELECTION
-  // 1. If EMAIL_HOST is provided and it looks like a custom server (NOT smtp.gmail.com by default empty)
   if (host && host.trim() !== '' && host !== 'smtp.gmail.com') {
     console.log(`[SMTP INFO] Strategy: Using Custom Host (${host}:${port})`);
     transportConfig.host = host;
     transportConfig.port = port;
     
-    // Explicitly set secure based on env or port
     if (process.env.EMAIL_SECURE !== undefined && process.env.EMAIL_SECURE !== '') {
       transportConfig.secure = process.env.EMAIL_SECURE === 'true';
     } else {
       transportConfig.secure = port === 465;
     }
-    
-    // Explicitly disable service fallback if custom host is used
-    delete transportConfig.service;
   } 
-  // 2. If EMAIL_SERVICE is provided (e.g. 'gmail')
   else if (service && service.trim() !== '') {
     console.log(`[SMTP INFO] Strategy: Using Built-in Service (${service})`);
     transportConfig.service = service;
   } 
-  // 3. Absolute Fallback to Gmail
+  else if (emailUser.toLowerCase().endsWith('@gmail.com')) {
+    console.log(`[SMTP INFO] Strategy: Detected Gmail address, using Gmail service`);
+    transportConfig.service = 'gmail';
+  }
   else {
     console.log(`[SMTP INFO] Strategy: Falling back to Gmail Default`);
     transportConfig.service = 'gmail';
   }
 
-  console.log('[SMTP INFO] Final Transport Config (redacted):', {
-    host: transportConfig.host,
-    port: transportConfig.port,
-    service: transportConfig.service,
-    secure: transportConfig.secure,
-    user: transportConfig.auth.user
-  });
+  // Final fix for common Gmail issues:
+  if (transportConfig.service === 'gmail') {
+    transportConfig.tls = {
+      rejectUnauthorized: false
+    };
+  }
 
   transporter = nodemailer.createTransport(transportConfig);
-
   return transporter;
+};
+
+let lastError: string | null = null;
+let isReady = false;
+
+export const getEmailStatus = () => {
+    let helpMessage = null;
+    if (!process.env.EMAIL_USER || !process.env.EMAIL_PASS) {
+        helpMessage = 'Missing SMTP credentials. Please set EMAIL_USER and EMAIL_PASS in Secrets.';
+    } else if (lastError?.includes('535')) {
+        helpMessage = 'Authentication failed. Check if you need an "App Password" (common for Gmail).';
+    }
+
+    return {
+        isReady,
+        lastError,
+        helpMessage,
+        config: {
+            host: process.env.EMAIL_HOST || 'smtp.gmail.com',
+            user: process.env.EMAIL_USER,
+            service: process.env.EMAIL_SERVICE || (process.env.EMAIL_HOST ? 'custom' : 'gmail'),
+            port: process.env.EMAIL_PORT || '587'
+        }
+    };
 };
 
 export const verifyEmailConfig = async () => {
     try {
         const mailTransporter = getTransporter();
         if (!mailTransporter) {
+            lastError = 'Missing EMAIL_USER or EMAIL_PASS';
+            isReady = false;
             console.warn('⚠️ EMAIL_USER or EMAIL_PASS environment variables are missing. Email notifications are disabled.');
             return false;
         }
 
         await mailTransporter.verify();
+        lastError = null;
+        isReady = true;
         console.log('✅ SMTP Connection verified. Email service is READY.');
         return true;
     } catch (error: any) {
         const errorMsg = error.message || String(error);
-        console.error('❌ EMAIL CONFIGURATION ERROR');
-        console.error(`SMTP Status: ${errorMsg}`);
+        lastError = errorMsg;
+        isReady = false;
+        console.warn('⚠️ EMAIL NOTIFICATIONS DISABLED');
+        console.warn(`SMTP Status: ${errorMsg}`);
         
         if (errorMsg.includes('535')) {
-            console.error('DIAGNOSIS: Authentication Failed (Invalid Credentials).');
-            console.error('---------------------------------------------------------');
-            console.error(`CURRENT HOST: ${process.env.EMAIL_HOST || 'smtp.gmail.com'}`);
-            console.error(`CURRENT USER: ${process.env.EMAIL_USER}`);
-            console.error('---------------------------------------------------------');
-            console.error('FOR SMTP2GO USERS:');
-            console.error('1. Set EMAIL_HOST to: mail.smtp2go.com');
-            console.error('2. Set EMAIL_PORT to: 2525 (Recommended) or 587');
-            console.error('3. Verify your SMTP Username/Password in SMTP2GO Dashboard > Settings > SMTP Users');
-            console.error('4. Ensure your "Sender" email matches an authorized domain in SMTP2GO.');
-            console.error('---------------------------------------------------------');
-            console.error('FOR GMAIL USERS:');
-            console.error('1. You MUST use an "App Password" (not regular password).');
-            console.error('2. Create one at https://myaccount.google.com/apppasswords');
-            console.error('---------------------------------------------------------');
+            lastError = 'Authentication Failed (535): Invalid credentials or App Password required.';
+            console.warn('⚠️ SMTP AUTHENTICATION FAILED');
+            console.warn('The email server rejected your credentials. If using Gmail, an "App Password" is REQUIRED.');
+            console.warn('Visit: https://myaccount.google.com/apppasswords');
         } else if (errorMsg.includes('EAI_AGAIN') || errorMsg.includes('ENOTFOUND')) {
-            console.error('DIAGNOSIS: Network/DNS Error. Check your EMAIL_HOST setting.');
+            console.warn('⚠️ SMTP NETWORK ERROR: Check your EMAIL_HOST setting (DNS not found).');
+        } else {
+            console.warn(`⚠️ SMTP ERROR: ${errorMsg}`);
         }
 
         // Wipe the transporter so it can be re-initialized if env vars change

@@ -15,10 +15,17 @@ export interface IReport extends Document {
   street?: string;
   category?: string;
   cooperativeType?: string;
+  secondaryCooperativeType?: string;
+  specificType?: string;
+  cooperativeCluster?: string;
+  secondaryCooperativeCluster?: string;
   assetSize2025?: string;
   assetSize2026?: string;
-  statusOfCompliance?: string;
-  statusDetails?: string;
+  dateCompliedToOTCOrSCO?: string;
+  dateInspected?: Date;
+  inspectionStatus?: string;
+  dateIssuedRecommended?: Date;
+  dateCompliedToOTCandSCO?: Date;
   parsedData: any; // Raw document content from CSV
   uploadedBy: mongoose.Types.ObjectId;
   createdAt: Date;
@@ -41,10 +48,18 @@ const ReportSchema: Schema = new Schema(
     street: { type: String },
     category: { type: String },
     cooperativeType: { type: String },
+    secondaryCooperativeType: { type: String },
+    specificType: { type: String },
+    cooperativeCluster: { type: String },
+    secondaryCooperativeCluster: { type: String },
     assetSize2025: { type: String },
     assetSize2026: { type: String },
     statusOfCompliance: { type: String },
     statusDetails: { type: String },
+    dateInspected: { type: Date },
+    inspectionStatus: { type: String },
+    dateIssuedRecommended: { type: Date },
+    dateCompliedToOTCandSCO: { type: Date },
     parsedData: { type: Schema.Types.Mixed },
     uploadedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
   },

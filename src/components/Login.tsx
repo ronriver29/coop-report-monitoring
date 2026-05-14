@@ -13,10 +13,10 @@ export default function Login({ onLoginSuccess }: Props) {
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const isExpired = new URLSearchParams(window.location.search).get('expired') === 'true';
+  const [showExpired, setShowExpired] = useState(new URLSearchParams(window.location.search).get('expired') === 'true');
 
   const handleGoogleLogin = async () => {
+    setShowExpired(false);
     try {
       const response = await apiRequest('/api/auth/google/url');
       const data = await response.json();
@@ -124,8 +124,8 @@ export default function Login({ onLoginSuccess }: Props) {
             <h2 className="text-2xl font-bold text-text-main mb-1">Access Gateway</h2>
             <p className="text-[11px] font-semibold text-text-muted uppercase tracking-wider mb-10">Verification Required</p>
 
-            {isExpired && (
-              <div className="bg-orange-50 border border-orange-100 p-4 rounded-lg mb-8 flex gap-3 animate-pulse">
+            {showExpired && (
+              <div className="bg-orange-50 border border-orange-100 p-4 rounded-lg mb-8 flex gap-3">
                 <Clock className="text-orange-600 shrink-0" size={18} />
                 <p className="text-[11px] font-bold uppercase text-orange-800">Your session has expired. Please log in again to continue.</p>
               </div>
@@ -167,7 +167,10 @@ export default function Login({ onLoginSuccess }: Props) {
                   </div>
 
                   <button
-                    onClick={() => setUseEmail(true)}
+                    onClick={() => {
+                      setUseEmail(true);
+                      setShowExpired(false);
+                    }}
                     className="w-full border border-border text-text-main py-4 rounded-lg font-bold text-sm tracking-wide hover:bg-bg transition-colors flex items-center justify-center gap-3"
                   >
                     <Mail size={18} />
@@ -191,7 +194,10 @@ export default function Login({ onLoginSuccess }: Props) {
                         type="email"
                         required
                         value={email}
-                        onChange={(e) => setEmail(e.target.value)}
+                        onChange={(e) => {
+                          setEmail(e.target.value);
+                          setShowExpired(false);
+                        }}
                         className="w-full pl-10 pr-4 py-3 bg-bg border border-border rounded-lg outline-none focus:border-accent transition-colors"
                         placeholder="name@cda.gov.ph"
                       />

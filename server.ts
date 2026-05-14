@@ -26,8 +26,8 @@ import dashboardRoutes from './src/routes/dashboardRoutes.ts';
 import auditRoutes from './src/routes/auditRoutes.ts';
 import settingsRoutes from './src/routes/settingsRoutes.ts';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const _filename = typeof import.meta?.url !== 'undefined' ? fileURLToPath(import.meta.url) : (typeof __filename !== 'undefined' ? __filename : '');
+const _dirname = typeof import.meta?.url !== 'undefined' ? path.dirname(_filename) : (typeof __dirname !== 'undefined' ? __dirname : process.cwd());
 
 const app = express();
 const PORT = 3000;
@@ -163,7 +163,7 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
 
 // Serve frontend assets
 async function initFrontend() {
-  if (process.env.NODE_ENV !== 'production' && process.env.VERCEL !== '1') {
+  if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -185,13 +185,6 @@ async function initFrontend() {
 
 // Global Bootstrap
 async function bootstrap() {
-  if (process.env.VERCEL === '1') {
-    // On Vercel, we don't want the background bootstrap to fight with the request handler
-    // But we still need to initialize the frontend route if it's the one serving it
-    await initFrontend();
-    return;
-  }
-
   await connectDB();
   await initFrontend();
   
@@ -202,13 +195,7 @@ async function bootstrap() {
   verifyEmailConfig().catch(err => console.error('Bootstrap Email Warning:', err));
 }
 
-// Run bootstrap only if not on Vercel (where api/index handles DB)
-if (process.env.VERCEL !== '1') {
-  bootstrap().catch(err => console.error('Fatal Bootstrap Error:', err));
-} else {
-  // On Vercel, just ensure frontend routes are registered
-  initFrontend().catch(err => console.error('Vercel Frontend Init Error:', err));
-}
+bootstrap().catch(err => console.error('Fatal Bootstrap Error:', err));
 
 export default app;
 
