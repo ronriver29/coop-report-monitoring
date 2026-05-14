@@ -2686,7 +2686,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
             id="coop_type_filter_select"
           >
             <option value="">All Types</option>
-            {ALL_COOP_TYPES.map(type => (
+            {[...ALL_COOP_TYPES].sort().map(type => (
               <option key={type} value={type}>{type}</option>
             ))}
           </select>
