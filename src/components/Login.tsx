@@ -15,10 +15,10 @@ export default function Login({ onLoginSuccess }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [showExpired, setShowExpired] = useState(new URLSearchParams(window.location.search).get('expired') === 'true');
 
-  const handleGoogleLogin = async () => {
+  const handleAuthentikLogin = async () => {
     setShowExpired(false);
     try {
-      const response = await apiRequest('/api/auth/google/url');
+      const response = await apiRequest('/api/auth/authentik/url');
       const data = await response.json();
       
       if (!response.ok) {
@@ -39,7 +39,7 @@ export default function Login({ onLoginSuccess }: Props) {
       );
     } catch (error: any) {
       console.error('Login error:', error);
-      setError(error.message || 'Failed to initialize Google Login.');
+      setError(error.message || 'Failed to initialize Authentik Login.');
     }
   };
 
@@ -86,7 +86,7 @@ export default function Login({ onLoginSuccess }: Props) {
             <img 
               src="https://cda.gov.ph/wp-content/uploads/2021/01/CDA-logo-RA11364-PNG.png" 
               alt="CDA Logo" 
-              className="w-12 h-12 object-contain brightness-0 invert"
+              className="w-12 h-12 object-contain"
             />
             <span className="font-bold text-sm uppercase tracking-[0.3em] opacity-80 font-mono">Supervision & Examaintaion Division</span>
           </div>
@@ -134,30 +134,18 @@ export default function Login({ onLoginSuccess }: Props) {
             <AnimatePresence mode="wait">
               {!useEmail ? (
                 <motion.div
-                  key="google-login"
+                  key="sso-login"
                   initial={{ opacity: 0, x: -20 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: 20 }}
                   className="space-y-6"
                 >
-                  <div className="bg-blue-50 border border-blue-100 p-5 rounded-lg mb-8 flex gap-4">
-                    <ShieldAlert className="text-blue-600 shrink-0" size={20} />
-                    <div>
-                      <p className="text-[11px] font-bold uppercase text-blue-800">Domain Policy</p>
-                      <p className="text-[11px] text-blue-700 leading-normal mt-0.5">
-                        Access via Google is restricted to <strong>@cda.gov.ph</strong> email addresses.
-                      </p>
-                    </div>
-                  </div>
-
                   <button
-                    onClick={handleGoogleLogin}
-                    className="w-full bg-accent text-white py-4 rounded-lg font-bold text-sm tracking-wide hover:opacity-90 transition-opacity flex items-center justify-center gap-3 shadow-lg shadow-accent/20"
+                    onClick={handleAuthentikLogin}
+                    className="w-full bg-[#fd4b2d] text-white py-4 rounded-lg font-bold text-sm tracking-wide hover:opacity-90 transition-opacity flex items-center justify-center gap-3 shadow-lg shadow-[#fd4b2d]/20"
                   >
-                    <svg className="w-5 h-5 fill-current" viewBox="0 0 24 24">
-                      <path d="M12.48 10.92v3.28h7.84c-.24 1.84-.91 3.22-1.92 4.24-1.2 1.2-3.08 2.48-6.12 2.48-4.92 0-8.8-4-8.8-8.92s3.88-8.92 8.8-8.92c2.66 0 4.66 1.05 6.1 2.38l2.3-2.3C18.66 1.01 15.9 0 12.48 0 5.82 0 0 5.4 0 12s5.82 12 12.48 12c3.55 0 6.22-1.18 8.27-3.35 2.1-2.1 2.76-5.06 2.76-7.44 0-.71-.05-1.39-.16-2.03H12.48z" />
-                    </svg>
-                    Google Authority Login
+                    <Fingerprint size={20} />
+                    Authentik SSO
                   </button>
 
                   <div className="relative flex items-center py-4">
@@ -205,7 +193,10 @@ export default function Login({ onLoginSuccess }: Props) {
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold text-text-muted uppercase mb-1 whitespace-nowrap">Password</label>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block text-[10px] font-bold text-text-muted uppercase whitespace-nowrap">Password</label>
+                      <span className="text-[10px] text-slate-500">Hint: admin123</span>
+                    </div>
                     <div className="relative">
                       <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" size={16} />
                       <input
@@ -220,8 +211,9 @@ export default function Login({ onLoginSuccess }: Props) {
                   </div>
 
                   {error && (
-                    <div className="text-[11px] text-red-500 font-medium bg-red-50 p-3 rounded-lg border border-red-100">
-                      {error}
+                    <div className="text-[11px] text-red-700 font-medium bg-red-50 p-3 rounded-lg border border-red-200 flex items-start gap-2 shadow-sm">
+                      <ShieldAlert size={14} className="text-red-500 shrink-0 mt-0.5" />
+                      <span className="leading-relaxed">{error}</span>
                     </div>
                   )}
 
@@ -233,13 +225,13 @@ export default function Login({ onLoginSuccess }: Props) {
                     {loading ? <Loader2 className="animate-spin" /> : 'Authorize Access'}
                     <ArrowRight size={18} />
                   </button>
-
+                  
                   <button
                     type="button"
                     onClick={() => setUseEmail(false)}
-                    className="w-full text-[11px] font-bold text-accent uppercase tracking-wider py-2"
+                    className="w-full text-[11px] font-bold text-accent uppercase tracking-wider py-2 mt-4"
                   >
-                    Back to Google Login
+                    Back to SSO
                   </button>
                 </motion.form>
               )}

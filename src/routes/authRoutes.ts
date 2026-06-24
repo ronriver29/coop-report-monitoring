@@ -12,10 +12,183 @@ const router = express.Router();
 
 /**
  * @swagger
+ * /api/auth/authentik/url:
+ *   get:
+ *     summary: Get Authentik authorization URL
+ *     tags: [Auth]
+ */
+router.get('/authentik/url', (req, res) => {
+  const clientId = process.env.AUTHENTIK_CLIENT_ID;
+  const authentikUrl = process.env.AUTHENTIK_URL?.replace(/\/$/, '');
+  const appUrl = (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).trim().replace(/\/$/, '');
+
+  if (!clientId || !authentikUrl) {
+    console.error('Missing Authentik configuration');
+    return res.status(500).json({ 
+      error: 'OAuth configuration incomplete', 
+      message: 'Please ensure AUTHENTIK_CLIENT_ID and AUTHENTIK_URL are set.' 
+    });
+  }
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: `${appUrl}/api/auth/authentik/callback`,
+    response_type: 'code',
+    scope: 'openid profile email',
+  });
+  
+  const authUrl = `${authentikUrl}/application/o/authorize/?${params.toString()}`;
+  res.json({ url: authUrl });
+});
+
+/**
+ * @swagger
+ * /api/auth/authentik/callback:
+ *   get:
+ *     summary: Authentik OAuth callback
+ *     tags: [Auth]
+ */
+router.get('/authentik/callback', async (req, res) => {
+  const code = req.query.code as string;
+  const clientId = process.env.AUTHENTIK_CLIENT_ID;
+  const clientSecret = process.env.AUTHENTIK_CLIENT_SECRET;
+  const authentikUrl = process.env.AUTHENTIK_URL?.replace(/\/$/, '');
+  const appUrl = (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).trim().replace(/\/$/, '');
+
+  if (!code || !clientId || !clientSecret || !authentikUrl) {
+    return res.status(400).send('Invalid request or configuration');
+  }
+
+  try {
+    const tokenRes = await fetch(`${authentikUrl}/application/o/token/`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: `${appUrl}/api/auth/authentik/callback`,
+      })
+    });
+    
+    const tokenData = await tokenRes.json();
+    if (!tokenRes.ok) throw new Error(tokenData.error_description || 'Failed to get token');
+
+    const userInfoRes = await fetch(`${authentikUrl}/application/o/userinfo/`, {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` }
+    });
+    const userInfo = await userInfoRes.json();
+
+    if (!userInfo.email) {
+      throw new Error('No email provided by Authentik');
+    }
+
+    const normalizedEmail = userInfo.email.trim().toLowerCase();
+    let user = await User.findOne({ email: normalizedEmail });
+
+    if (!user) {
+      const tempPass = crypto.randomBytes(8).toString('hex');
+      const hashedPassword = await bcrypt.hash(tempPass, 10);
+      user = await User.create({
+        displayName: userInfo.name || userInfo.preferred_username || normalizedEmail,
+        email: normalizedEmail,
+        role: UserRole.VIEWER,
+        password: hashedPassword,
+        mustChangePassword: false,
+        isActive: true
+      });
+    } else if (!user.isActive) {
+      return res.status(403).send('Account is deactivated');
+    }
+
+    const token = generateToken(user._id.toString());
+    
+    res.send(`
+      <html>
+        <body>
+          <script>
+            if (window.opener) {
+              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', token: '${token}', user: ${JSON.stringify({
+                id: user._id.toString(),
+                displayName: user.displayName,
+                email: user.email,
+                role: user.role,
+                region: user.region,
+                mustChangePassword: user.mustChangePassword
+              })} }, '*');
+              window.close();
+            } else {
+              window.location.href = '/dashboard?token=${token}';
+            }
+          </script>
+          <p>Authentication successful. You can close this window.</p>
+        </body>
+      </html>
+    `);
+  } catch (error: any) {
+    console.error('Authentik callback error:', error);
+    res.status(500).send(`Authentication failed: ${error.message}`);
+  }
+});
+
+/**
+ * @swagger
  * /api/auth/login:
  *   post:
  *     summary: Login with email and password
+ *     description: Authenticates a operator with their registered email address and password, returning a JWT token and user profile details.
  *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - password
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: admin@cda.gov.ph
+ *               password:
+ *                 type: string
+ *                 format: password
+ *                 example: admin123
+ *     responses:
+ *       200:
+ *         description: Successfully authenticated. Returns JWT token and profile.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 token:
+ *                   type: string
+ *                   description: JWT access token for auth
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     displayName:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *                     mustChangePassword:
+ *                       type: boolean
+ *       400:
+ *         description: Bad request (missing email or password)
+ *       401:
+ *         description: Unauthorized (invalid credentials)
+ *       403:
+ *         description: Forbidden (account is deactivated)
+ *       500:
+ *         description: Internal Server Error
  */
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
@@ -24,8 +197,10 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ message: 'Email and password are required' });
   }
 
+  const normalizedEmail = email.trim().toLowerCase().replace(/\.\.+/g, '.');
+
   try {
-    const user = await User.findOne({ email }).select('+password');
+    const user = await User.findOne({ email: normalizedEmail }).select('+password');
 
     if (!user || !user.password) {
       return res.status(401).json({ message: 'Invalid credentials' });
@@ -67,7 +242,70 @@ router.post('/login', async (req, res) => {
  * /api/auth/users:
  *   post:
  *     summary: Create a new user (Admin Only)
+ *     description: Registers a new monitoring operator or evaluator, generates a temporary password, and sends a welcome notification email.
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - displayName
+ *               - email
+ *               - role
+ *             properties:
+ *               displayName:
+ *                 type: string
+ *                 example: Juan Dela Cruz
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: juan.delacruz@cda.gov.ph
+ *               role:
+ *                 type: string
+ *                 enum: [ADMIN, ANALYST, REGIONAL_ANALYST, VIEWER]
+ *                 example: REGIONAL_ANALYST
+ *               region:
+ *                 type: string
+ *                 example: REGION_III
+ *     responses:
+ *       201:
+ *         description: User created and email sent successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 emailSent:
+ *                   type: boolean
+ *                 tempPassword:
+ *                   type: string
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     displayName:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *                     region:
+ *                       type: string
+ *       400:
+ *         description: Bad request (user already exists or missing criteria)
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Forbidden (requires ADMIN role)
+ *       500:
+ *         description: Server error during user creation
  */
 router.post('/users', protect, restrictTo(UserRole.ADMIN), async (req: any, res) => {
   const { displayName, email, role, region } = req.body;
@@ -77,10 +315,11 @@ router.post('/users', protect, restrictTo(UserRole.ADMIN), async (req: any, res)
     return res.status(400).json({ message: 'Display name, email, and role are required' });
   }
 
+  const normalizedEmail = email.trim().toLowerCase().replace(/\.\.+/g, '.');
   let finalRegion = region;
 
   try {
-    const existingUser = await User.findOne({ email });
+    const existingUser = await User.findOne({ email: normalizedEmail });
     if (existingUser) {
       return res.status(400).json({ message: 'User already exists' });
     }
@@ -91,7 +330,7 @@ router.post('/users', protect, restrictTo(UserRole.ADMIN), async (req: any, res)
 
     const newUser = await User.create({
       displayName,
-      email,
+      email: normalizedEmail,
       role,
       region: finalRegion,
       password: hashedPassword,
@@ -99,7 +338,7 @@ router.post('/users', protect, restrictTo(UserRole.ADMIN), async (req: any, res)
     });
 
     // Send welcome email
-    const emailSent = await sendWelcomeEmail(email, displayName, tempPass);
+    const emailSent = await sendWelcomeEmail(normalizedEmail, displayName, tempPass);
 
     await logAction(
       currentUser._id.toString(),
@@ -134,7 +373,38 @@ router.post('/users', protect, restrictTo(UserRole.ADMIN), async (req: any, res)
  * /api/auth/users:
  *   get:
  *     summary: Get all users (Admin Only)
+ *     description: Retrieves list of all registered personnel, sorted by registration date.
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of registered users retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   _id:
+ *                     type: string
+ *                   displayName:
+ *                     type: string
+ *                   email:
+ *                     type: string
+ *                   role:
+ *                     type: string
+ *                   region:
+ *                     type: string
+ *                   isActive:
+ *                     type: boolean
+ *       401:
+ *         description: Not authenticated
+ *       403:
+ *         description: Not authorized (requires ADMIN role)
+ *       500:
+ *         description: Server error retrieving users
  */
 router.get('/users', protect, restrictTo(UserRole.ADMIN), async (req: any, res) => {
   try {
@@ -152,7 +422,46 @@ router.get('/users', protect, restrictTo(UserRole.ADMIN), async (req: any, res) 
  * /api/auth/users/{id}/role:
  *   patch:
  *     summary: Update user role (Admin Only)
+ *     description: Updates the operational role or regional delegation of a user by their MongoDB ID.
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: MongoDB ID of the user record
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - role
+ *             properties:
+ *               role:
+ *                 type: string
+ *                 enum: [ADMIN, ANALYST, REGIONAL_ANALYST, VIEWER]
+ *                 example: ANALYST
+ *               region:
+ *                 type: string
+ *                 example: NCR
+ *     responses:
+ *       200:
+ *         description: Role and regional constraints updated successfully
+ *       400:
+ *         description: Invalid parameters or role specified
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden (Admin only)
+ *       404:
+ *         description: User record not found
+ *       500:
+ *         description: Server error updating role
  */
 router.patch('/users/:id/role', protect, restrictTo(UserRole.ADMIN), async (req: any, res) => {
   const { role, region } = req.body;
@@ -194,7 +503,42 @@ router.patch('/users/:id/role', protect, restrictTo(UserRole.ADMIN), async (req:
  * /api/auth/users/{id}/status:
  *   patch:
  *     summary: Toggle user active status (Admin Only)
+ *     description: Enables or disables a user account, preventing further sign-ins. Users cannot deactivate their own session account.
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User MongoDB ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - isActive
+ *             properties:
+ *               isActive:
+ *                 type: boolean
+ *                 example: false
+ *     responses:
+ *       200:
+ *         description: Active status updated successfully
+ *       400:
+ *         description: Bad request or attempt to deactivate self
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden (Admin only)
+ *       404:
+ *         description: User record not found
+ *       500:
+ *         description: Server error changing user status
  */
 router.patch('/users/:id/status', protect, restrictTo(UserRole.ADMIN), async (req: any, res) => {
   const { isActive } = req.body;
@@ -236,41 +580,76 @@ router.patch('/users/:id/status', protect, restrictTo(UserRole.ADMIN), async (re
  * /api/auth/users/{id}:
  *   delete:
  *     summary: Delete a user (Admin Only)
+ *     description: Permanently removes a personnel record of an operator or analyst from the system registration. A user is prevented from deleting their own account.
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User MongoDB ID
+ *     responses:
+ *       200:
+ *         description: Personnel account deleted successfully
+ *       400:
+ *         description: Attempt to delete self
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden (Admin only)
+ *       404:
+ *         description: User record not found
+ *       500:
+ *         description: Server error deleting user
  */
-router.delete('/users/:id', protect, restrictTo(UserRole.ADMIN), async (req: any, res) => {
-  const { id } = req.params;
-
-  try {
-    if (id === req.user._id.toString()) {
-      return res.status(400).json({ message: 'You cannot delete your own account' });
-    }
-
-    const user = await User.findByIdAndDelete(id);
-    if (!user) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-
-    await logAction(
-      req.user._id.toString(),
-      'USER_DELETED',
-      `Deleted user ${user.displayName} (${user.email})`,
-      'USER',
-      id
-    );
-
-    res.json({ message: 'User deleted successfully' });
-  } catch (error) {
-    res.status(500).json({ message: 'Failed to delete user' });
-  }
-});
 
 /**
  * @swagger
  * /api/auth/users/{id}:
  *   patch:
  *     summary: Update user details (Admin Only)
+ *     description: Selectively modifies displayName, role, region, and active state of a specific personnel.
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User MongoDB ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               displayName:
+ *                 type: string
+ *                 example: Juan Cruz
+ *               role:
+ *                 type: string
+ *                 enum: [ADMIN, ANALYST, REGIONAL_ANALYST, VIEWER]
+ *               region:
+ *                 type: string
+ *               isActive:
+ *                 type: boolean
+ *     responses:
+ *       200:
+ *         description: User details updated successfully
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Server error updating user details
  */
 router.patch('/users/:id', protect, restrictTo(UserRole.ADMIN), async (req: any, res) => {
   const { displayName, role, region, isActive } = req.body;
@@ -320,86 +699,37 @@ router.patch('/users/:id', protect, restrictTo(UserRole.ADMIN), async (req: any,
   }
 });
 
-router.get('/google/url', (req, res) => {
-  const clientId = process.env.GOOGLE_CLIENT_ID;
-  const appUrl = (process.env.APP_URL || `${req.protocol}://${req.get('host')}`).trim().replace(/\/$/, '');
-
-  if (!clientId) {
-    console.error('Missing Google Client ID');
-    return res.status(500).json({ 
-      error: 'OAuth configuration incomplete', 
-      message: 'Please ensure GOOGLE_CLIENT_ID is set in environment variables.' 
-    });
-  }
-
-  const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: `${appUrl}/api/auth/google/callback`,
-    response_type: 'code',
-    scope: 'profile email',
-    access_type: 'offline',
-    prompt: 'consent'
-  });
-  const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
-  res.json({ url: authUrl });
-});
-
-/**
- * @swagger
- * /api/auth/google:
- *   get:
- *     summary: Redirect to Google OAuth (Legacy/Fallback)
- *     tags: [Auth]
- */
-router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
-
-/**
- * @swagger
- * /api/auth/google/callback:
- *   get:
- *     summary: Google OAuth callback
- *     tags: [Auth]
- */
-router.get(
-  ['/google/callback', '/google/callback/'],
-  passport.authenticate('google', { session: true, failureRedirect: '/login?error=auth_failed' }),
-  (req, res) => {
-    // Successfully authenticated
-    const user = req.user as any;
-    const token = generateToken(user._id.toString());
-
-    // Send success message to parent window (AI Studio iframe handler)
-    res.send(`
-      <html>
-        <body>
-          <script>
-            if (window.opener) {
-              window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS', token: '${token}', user: ${JSON.stringify({
-                id: user._id.toString(),
-                displayName: user.displayName,
-                email: user.email,
-                role: user.role,
-                region: user.region,
-                mustChangePassword: user.mustChangePassword
-              })} }, '*');
-              window.close();
-            } else {
-              window.location.href = '/dashboard?token=${token}';
-            }
-          </script>
-          <p>Authentication successful. You can close this window.</p>
-        </body>
-      </html>
-    `);
-  }
-);
-
 /**
  * @swagger
  * /api/auth/change-password:
  *   post:
  *     summary: Change user password
+ *     description: Updates the access password of the currently authenticated user. Required 6+ characters.
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - newPassword
+ *             properties:
+ *               newPassword:
+ *                 type: string
+ *                 minimum: 6
+ *                 example: MyCoolNewSecret123
+ *     responses:
+ *       200:
+ *         description: Password updated successfully
+ *       400:
+ *         description: Invalid password length
+ *       401:
+ *         description: Unauthenticated
+ *       500:
+ *         description: Server error updating password
  */
 router.post('/change-password', protect, async (req: any, res) => {
   const { newPassword } = req.body;
@@ -426,7 +756,37 @@ router.post('/change-password', protect, async (req: any, res) => {
  * /api/auth/me:
  *   get:
  *     summary: Get current user profile
+ *     description: Returns the user display credentials, regional bindings, and operational status of the calling JWT session.
  *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Current user profile details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     displayName:
+ *                       type: string
+ *                     email:
+ *                       type: string
+ *                     role:
+ *                       type: string
+ *                     region:
+ *                       type: string
+ *                     mustChangePassword:
+ *                       type: boolean
+ *       401:
+ *         description: Unauthenticated
+ *       500:
+ *         description: Server retrieval error
  */
 router.get('/me', protect, async (req: any, res) => {
   res.json({

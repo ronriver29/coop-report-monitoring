@@ -6,7 +6,53 @@ import { UserRole } from '../constants.ts';
 
 const router = express.Router();
 
-// Get audit logs - Admin only
+/**
+ * @swagger
+ * /api/audit:
+ *   get:
+ *     summary: Retrieve personnel action audit logs (Admin Only)
+ *     description: Fetches a structured, chronological list of security event logs, action audits, database modifications, and user state toggles. Secured by JWT validation and ADMIN restriction.
+ *     tags: [Audit]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - name: page
+ *         in: query
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Page offset index
+ *       - name: limit
+ *         in: query
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *         description: Log item limit per page
+ *     responses:
+ *       200:
+ *         description: Audit logs list matched and retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 logs:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                 total:
+ *                   type: integer
+ *                 pages:
+ *                   type: integer
+ *                 currentPage:
+ *                   type: integer
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Not authorized (requires ADMIN role)
+ *       500:
+ *         description: Server database query retrieval error
+ */
 router.get('/', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;

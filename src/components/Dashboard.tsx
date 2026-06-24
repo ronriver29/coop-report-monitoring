@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { User, DashboardStats, UserRole } from '../types.ts';
-import { GoogleGenAI } from "@google/genai";
 import { 
   FileUp, BarChart3, Users, Clock, ShieldCheck, UserPlus, 
   Lock, Loader2, X, ShieldAlert, MapPin, LayoutDashboard,
@@ -8,7 +7,7 @@ import {
   CheckCircle2, AlertTriangle, Shield, Eye, Trash2, 
   UserMinus, UserCheck, Edit2, Bell, Copy, RefreshCw, Search, Layers,
   Menu, Sun, Moon, Download, Wrench, Layout, Filter, Check, Plus,
-  Sparkles, Wand2
+  Sparkles, Wand2, ChevronLeft, ChevronRight, Save
 } from 'lucide-react';
 import { FuturisticLoader } from './FuturisticLoader.tsx';
 import { motion, AnimatePresence } from 'motion/react';
@@ -17,6 +16,7 @@ import { apiRequest } from '../lib/api.ts';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
 
 import { generateSummaryReport, generateEvaluationReport, generateCustomReport } from '../services/reportService.ts';
+import MapVisualizer from './MapVisualizer.tsx';
 
 interface Props {
   user: User | null;
@@ -25,7 +25,7 @@ interface Props {
 }
 
 export default function Dashboard({ user, token, onLogout }: Props) {
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'users' | 'ingest' | 'audit' | 'settings' | 'builder'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'reports' | 'users' | 'ingest' | 'audit' | 'settings' | 'builder' | 'map'>('dashboard');
   const [analysisData, setAnalysisData] = useState<{complianceStats: any[], regionStats: any[]} | null>(null);
   const [isAnalysisLoading, setIsAnalysisLoading] = useState(false);
   const [selectedBuilderFields, setSelectedBuilderFields] = useState<string[]>(['cooperativeName', 'registrationNumber', 'region', 'status', 'complianceStatus']);
@@ -201,15 +201,74 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   const [emailStatus, setEmailStatus] = useState<{ isReady: boolean, lastError: string | null, helpMessage?: string | null, config: any } | null>(null);
   const [isVerifyingEmail, setIsVerifyingEmail] = useState(false);
 
+  // SMTP Configuration form state
+  const [smtpHost, setSmtpHost] = useState('');
+  const [smtpPort, setSmtpPort] = useState('587');
+  const [smtpUser, setSmtpUser] = useState('');
+  const [smtpPass, setSmtpPass] = useState('');
+  const [smtpFrom, setSmtpFrom] = useState('');
+  const [smtpSecure, setSmtpSecure] = useState('false');
+  const [smtpService, setSmtpService] = useState('');
+  const [isSavingSmtp, setIsSavingSmtp] = useState(false);
+
   const fetchEmailStatus = async () => {
     try {
       const response = await apiRequest('/api/settings/email-status');
       if (response.ok) {
         const data = await response.json();
         setEmailStatus(data);
+        if (data && data.config) {
+          setSmtpHost(data.config.host || '');
+          setSmtpPort(data.config.port || '587');
+          setSmtpUser(data.config.user || '');
+          setSmtpFrom(data.config.from || '');
+          setSmtpSecure(String(data.config.secure || 'false'));
+          setSmtpService(data.config.service || '');
+          setSmtpPass(data.config.hasPassword ? '••••••••' : '');
+        }
       }
-    } catch (error) {
-      console.error('Fetch email status error:', error);
+    } catch (error: any) {
+      if (error && error.message !== 'Session expired' && !error.isNetworkError) {
+        console.error('Fetch email status error:', error);
+      }
+    }
+  };
+
+  const handleSaveSmtpSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingSmtp(true);
+    try {
+      const response = await apiRequest('/api/settings/smtp', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          host: smtpHost,
+          port: smtpPort,
+          user: smtpUser,
+          pass: smtpPass,
+          from: smtpFrom,
+          secure: smtpSecure,
+          service: smtpService
+        })
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        setEmailStatus(data.status);
+        if (data.status && data.status.config) {
+          setSmtpPass(data.status.config.hasPassword ? '••••••••' : '');
+        }
+        setUploadMessage({ type: 'success', text: 'SMTP configurations saved and tested successfully!' });
+      } else {
+        setUploadMessage({ type: 'error', text: data.message || 'Failed to update SMTP configurations.' });
+      }
+    } catch (err) {
+      console.error('Error saving SMTP settings:', err);
+      setUploadMessage({ type: 'error', text: 'An unexpected network error occurred while saving SMTP settings.' });
+    } finally {
+      setIsSavingSmtp(false);
+      setTimeout(() => setUploadMessage(null), 5000);
     }
   };
 
@@ -221,6 +280,9 @@ export default function Dashboard({ user, token, onLogout }: Props) {
       
       if (data.status) {
         setEmailStatus(data.status);
+        if (data.status.config) {
+          setSmtpPass(data.status.config.hasPassword ? '••••••••' : '');
+        }
       }
       
       if (response.ok && data.success) {
@@ -400,7 +462,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
         }
       }
     } catch (err: any) {
-      if (err.message !== 'Session expired') {
+      if (err.message !== 'Session expired' && !err.isNetworkError) {
         console.error('Failed to fetch notifications:', err);
       }
     } finally {
@@ -570,45 +632,31 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   const [isAiThinking, setIsAiThinking] = useState<string | null>(null);
 
   const handleAiSuggest = async (docId: string, docLabel: string) => {
-    if (!process.env.GEMINI_API_KEY) {
-      setUploadMessage({ type: 'error', text: 'Gemini API Key not configured' });
-      return;
-    }
-    
     setIsAiThinking(docId);
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-      const prompt = `You are a professional compliance evaluator for the Cooperative Development Authority (CDA).
-      
-      CONTEXT:
-      Cooperative Name: ${selectedReport.cooperativeName}
-      Cooperative Type: ${selectedReport.cooperativeType}
-      Document Type: ${docLabel}
-      Current Compliance Status: ${documentFindings[docId]?.value || 'Not Complying'}
-      
-      TASK: 
-      Generate a professional, concise, and formal "Summary of Findings" (evaluation remarks) for this specific document.
-      
-      GUIDELINES:
-      - 2 sentences maximum.
-      - Be technical and sector-appropriate.
-      - Use professional terminology.
-      - Do not use placeholders.
-      - If "Not Complying", suggest what is missing or incorrect based on document type.
-      - If "Complying", confirm full verification.`;
-
-      const result = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt
+      const res = await apiRequest('/api/gemini/suggest-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cooperativeName: selectedReport.cooperativeName,
+          cooperativeType: selectedReport.cooperativeType,
+          documentLabel: docLabel,
+          currentStatus: documentFindings[docId]?.value
+        })
       });
 
-      const suggestion = result.text;
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Failed to get AI suggestion');
+      }
+
+      const { suggestion } = await res.json();
       if (suggestion) {
         setDocumentFindings(prev => ({
           ...prev,
           [docId]: {
             ...prev[docId],
-            findings: suggestion.replace(/[*#]/g, '').trim()
+            findings: suggestion
           }
         }));
       }
@@ -656,35 +704,29 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   }, [selectedReport]);
 
   const handleAiSuggestMain = async () => {
-    if (!process.env.GEMINI_API_KEY) {
-      setUploadMessage({ type: 'error', text: 'Gemini API Key not configured' });
-      return;
-    }
-    
     setIsAiThinking('main');
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
       const summary = Object.entries(documentFindings)
         .map(([id, data]: [string, any]) => `${id}: ${data.value} - ${data.findings}`)
         .join('\n');
 
-      const prompt = `You are a professional compliance evaluator for the CDA.
-      Provide a comprehensive final evaluation summary for: ${selectedReport.cooperativeName}
-      
-      DETAILED DOCUMENT FINDINGS:
-      ${summary}
-      
-      TASK:
-      Generate a final 2-3 sentence overview that synthesizes these findings into a formal recommendation. Be direct and official.`;
-
-      const result = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: prompt
+      const res = await apiRequest('/api/gemini/summarize-evaluation', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          cooperativeName: selectedReport.cooperativeName,
+          findings: summary
+        })
       });
 
-      const suggestion = result.text;
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Failed to get AI summary');
+      }
+
+      const { suggestion } = await res.json();
       if (suggestion) {
-        setEvaluationRemarks(suggestion.replace(/[*#]/g, '').trim());
+        setEvaluationRemarks(suggestion);
       }
     } catch (err) {
       console.error('AI Summary Error:', err);
@@ -1642,25 +1684,123 @@ export default function Dashboard({ user, token, onLogout }: Props) {
                   </div>
                 </div>
                 
-                {!emailStatus?.isReady && (
-                   <div className="mt-6 p-6 bg-slate-50 dark:bg-slate-900/40 rounded-3xl border border-dashed border-[var(--border)]">
-                      <h5 className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-3">Resolution Guide</h5>
-                      <ul className="space-y-2">
-                        <li className="flex items-start gap-2 text-[11px] text-[var(--text-muted)]">
-                          <span className="w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500 shrink-0">1</span>
-                          Go to <strong>Settings</strong> &gt; <strong>Secrets</strong> in the AI Studio sidebar.
-                        </li>
-                        <li className="flex items-start gap-2 text-[11px] text-[var(--text-muted)]">
-                          <span className="w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500 shrink-0">2</span>
-                          Update <code>EMAIL_USER</code> and <code>EMAIL_PASS</code>.
-                        </li>
-                        <li className="flex items-start gap-2 text-[11px] text-[var(--text-muted)]">
-                          <span className="w-4 h-4 rounded-full bg-slate-200 dark:bg-slate-800 flex items-center justify-center text-[10px] font-bold text-slate-500 shrink-0">3</span>
-                          If using Gmail, use an <strong>App Password</strong>, not your regular Google password.
-                        </li>
-                      </ul>
-                   </div>
-                )}
+                <div className="mt-8 border-t border-[var(--border)] pt-8">
+                  <h4 className="text-xs font-black text-[var(--text-main)] uppercase tracking-[0.15em] mb-4 flex items-center gap-2">
+                    <Settings size={14} className="text-blue-500" />
+                    SMTP Parameters Editor
+                  </h4>
+                  
+                  <form onSubmit={handleSaveSmtpSettings} className="space-y-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                      
+                      {/* Host */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1.5">
+                          SMTP Host
+                        </label>
+                        <input
+                          type="text"
+                          value={smtpHost}
+                          onChange={e => setSmtpHost(e.target.value)}
+                          placeholder="e.g. mail.smtp2go.com"
+                          className="w-full px-4 py-2.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-medium text-[var(--text-main)] focus:outline-none focus:border-blue-500 hover:border-[var(--text-muted)]/30 transition-colors"
+                        />
+                      </div>
+
+                      {/* Port */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1.5">
+                          SMTP Port
+                        </label>
+                        <input
+                          type="text"
+                          value={smtpPort}
+                          onChange={e => setSmtpPort(e.target.value)}
+                          placeholder="e.g. 587 or 465"
+                          className="w-full px-4 py-2.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-medium text-[var(--text-main)] focus:outline-none focus:border-blue-500 hover:border-[var(--text-muted)]/30 transition-colors"
+                        />
+                      </div>
+
+                      {/* Secure */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1.5">
+                          SSL / TLS (Secure)
+                        </label>
+                        <select
+                          value={smtpSecure}
+                          onChange={e => setSmtpSecure(e.target.value)}
+                          className="w-full px-4 py-2.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-medium text-[var(--text-main)] focus:outline-none focus:border-blue-500 hover:border-[var(--text-muted)]/30 transition-colors"
+                        >
+                          <option value="false">No (Use STARTTLS / Port 587)</option>
+                          <option value="true">Yes (Use SSL on Port 465)</option>
+                        </select>
+                      </div>
+
+                      {/* User */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1.5">
+                          SMTP Username / User
+                        </label>
+                        <input
+                          type="text"
+                          value={smtpUser}
+                          onChange={e => setSmtpUser(e.target.value)}
+                          placeholder="your-smtp-username"
+                          className="w-full px-4 py-2.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-medium text-[var(--text-main)] focus:outline-none focus:border-blue-500 hover:border-[var(--text-muted)]/30 transition-colors"
+                        />
+                      </div>
+
+                      {/* Password */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1.5">
+                          SMTP Password
+                        </label>
+                        <input
+                          type="password"
+                          value={smtpPass}
+                          onChange={e => setSmtpPass(e.target.value)}
+                          placeholder="••••••••"
+                          className="w-full px-4 py-2.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-medium text-[var(--text-main)] focus:outline-none focus:border-blue-500 hover:border-[var(--text-muted)]/30 transition-colors"
+                        />
+                      </div>
+
+                      {/* Sender From */}
+                      <div>
+                        <label className="block text-[10px] font-bold text-[var(--text-muted)] uppercase tracking-widest mb-1.5">
+                          Sender Email (From)
+                        </label>
+                        <input
+                          type="email"
+                          value={smtpFrom}
+                          onChange={e => setSmtpFrom(e.target.value)}
+                          placeholder="e.g. sender@example.com"
+                          className="w-full px-4 py-2.5 bg-[var(--bg)] border border-[var(--border)] rounded-xl text-xs font-medium text-[var(--text-main)] focus:outline-none focus:border-blue-500 hover:border-[var(--text-muted)]/30 transition-colors"
+                        />
+                      </div>
+
+                    </div>
+
+                    <div className="flex justify-end pt-2">
+                      <button
+                        type="submit"
+                        disabled={isSavingSmtp}
+                        className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 text-white rounded-xl text-[10px] font-black uppercase tracking-widest shadow-lg shadow-blue-600/20 transition-all flex items-center gap-2"
+                      >
+                        {isSavingSmtp ? (
+                          <>
+                            <div className="w-3 h-3 border-2 border-white/20 border-t-white rounded-full animate-spin"></div>
+                            Saving settings...
+                          </>
+                        ) : (
+                          <>
+                            <Save size={12} />
+                            Save Config & Verify
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                </div>
               </div>
            </div>
 
@@ -1754,20 +1894,6 @@ export default function Dashboard({ user, token, onLogout }: Props) {
           <div>
             <h2 className="text-3xl font-display font-bold text-[var(--text-main)] tracking-tight">Report Builder</h2>
             <p className="text-sm text-[var(--text-muted)]">Select fields and dimensions to generate a custom appraisal report</p>
-          </div>
-          <div className="flex gap-3">
-            <button 
-              onClick={() => setSelectedBuilderFields(availableFields.map(f => f.id))}
-              className="px-4 py-2 text-[10px] font-black text-blue-600 dark:text-blue-400 uppercase tracking-widest hover:bg-blue-600/10 rounded-xl transition-all"
-            >
-              Select All
-            </button>
-            <button 
-              onClick={() => setSelectedBuilderFields([])}
-              className="px-4 py-2 text-[10px] font-black text-red-600 dark:text-red-400 uppercase tracking-widest hover:bg-red-600/10 rounded-xl transition-all"
-            >
-              Clear All
-            </button>
           </div>
         </header>
 
@@ -2052,12 +2178,32 @@ export default function Dashboard({ user, token, onLogout }: Props) {
       </header>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-         {[
-           { value: stats?.totalReports || '154', sub: 'TOTAL REPORTS PARSED', icon: Users, color: 'bg-blue-600' },
-           { value: '94.2%', sub: 'COMPLIANCE RATING', icon: CheckCircle2, color: 'bg-green-500' },
-           { value: 'P12.4B', sub: 'ESTIMATED ASSET VALUE', icon: BarChart3, color: 'bg-purple-600' },
-           { value: '100%', sub: 'REGISTRY ENTRIES JUSTIFIED', icon: ShieldCheck, color: 'bg-orange-500' },
-         ].map((stat, i) => (
+          {[
+            { 
+              value: stats?.totalReports || '154', 
+              sub: 'TOTAL REPORTS PARSED', 
+              icon: Users, 
+              color: 'bg-blue-600' 
+            },
+            { 
+              value: stats?.complianceRating ? `${stats.complianceRating}%` : '94.2%', 
+              sub: 'COMPLIANCE RATING', 
+              icon: CheckCircle2, 
+              color: 'bg-green-500' 
+            },
+            { 
+              value: stats?.totalAssetsValue ? `P${(stats.totalAssetsValue / 1e9).toFixed(1)}B` : 'P12.4B', 
+              sub: 'ESTIMATED ASSET VALUE', 
+              icon: BarChart3, 
+              color: 'bg-purple-600' 
+            },
+            { 
+              value: stats?.statusDistribution ? `${((stats.statusDistribution.find(s => s._id === 'Complied')?.count || 0) / (stats.totalReports || 1) * 100).toFixed(0)}%` : '100%', 
+              sub: 'REPORTS UPDATED', 
+              icon: ShieldCheck, 
+              color: 'bg-orange-500' 
+            },
+          ].map((stat, i) => (
            <motion.div 
              key={stat.sub}
              initial={{ opacity: 0, y: 20 }}
@@ -2493,17 +2639,17 @@ export default function Dashboard({ user, token, onLogout }: Props) {
           <p className="text-sm text-[var(--text-muted)]">Managing {reportTotal} records in active registry</p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           <button
             onClick={() => setIsAddingCoop(true)}
-            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-green-600/20 transition-all flex items-center gap-2 mr-2"
+            className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-green-600/10 hover:shadow-green-600/20 active:scale-95 transition-all flex items-center gap-2"
           >
             <UserPlus size={16} />
             Add New
           </button>
           <button
             onClick={handleExportCSV}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/20 transition-all flex items-center gap-2 mr-2"
+            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-blue-600/10 hover:shadow-blue-600/20 active:scale-95 transition-all flex items-center gap-2"
           >
             <Download size={16} />
             Export CSV
@@ -2514,28 +2660,35 @@ export default function Dashboard({ user, token, onLogout }: Props) {
               complianceStatus: reportComplianceFilter,
               region: reportRegionFilter
             }, user)}
-            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/20 transition-all flex items-center gap-2 mr-4"
+            className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-sm font-bold shadow-lg shadow-indigo-600/10 hover:shadow-indigo-600/20 active:scale-95 transition-all flex items-center gap-2 mr-2"
           >
             <FileText size={16} />
             Download PDF
           </button>
-          <button
-            disabled={reportPage === 1 || reportsLoading}
-            onClick={() => setReportPage(prev => Math.max(1, prev - 1))}
-            className="px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm font-bold text-[var(--text-muted)] disabled:opacity-50 hover:bg-[var(--bg)] transition-all flex items-center gap-2 shadow-sm transition-colors"
-          >
-             Previous
-          </button>
-          <div className="px-4 py-2 bg-[var(--bg)] rounded-xl text-xs font-black text-[var(--text-muted)] uppercase tracking-widest leading-6 transition-colors">
-            Page {reportPage} of {reportPages}
+          
+          <div className="flex items-center gap-1.5 bg-[var(--bg)] border border-[var(--border)] p-1 rounded-xl shadow-sm hover:border-blue-500/10 transition-all">
+            <button
+              disabled={reportPage === 1 || reportsLoading}
+              onClick={() => setReportPage(prev => Math.max(1, prev - 1))}
+              className="p-1.5 bg-[var(--card)] border border-[var(--border)] rounded-lg text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-40 hover:bg-[var(--bg)] transition-all flex items-center gap-1 shadow-sm disabled:pointer-events-none"
+              title="Previous Page"
+            >
+               <ChevronLeft size={14} />
+               <span className="hidden sm:inline">Prev</span>
+            </button>
+            <div className="px-3 text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider select-none">
+              {reportPage} / {reportPages}
+            </div>
+            <button
+              disabled={reportPage === reportPages || reportsLoading}
+              onClick={() => setReportPage(prev => Math.min(reportPages, prev + 1))}
+              className="p-1.5 bg-[var(--card)] border border-[var(--border)] rounded-lg text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-40 hover:bg-[var(--bg)] transition-all flex items-center gap-1 shadow-sm disabled:pointer-events-none"
+              title="Next Page"
+            >
+              <span className="hidden sm:inline">Next</span>
+              <ChevronRight size={14} />
+            </button>
           </div>
-          <button
-            disabled={reportPage === reportPages || reportsLoading}
-            onClick={() => setReportPage(prev => Math.min(reportPages, prev + 1))}
-            className="px-4 py-2 bg-[var(--card)] border border-[var(--border)] rounded-xl text-sm font-bold text-[var(--text-muted)] disabled:opacity-50 hover:bg-[var(--bg)] transition-all flex items-center gap-2 shadow-sm transition-colors"
-          >
-            Next
-          </button>
         </div>
       </header>
 
@@ -2735,7 +2888,8 @@ export default function Dashboard({ user, token, onLogout }: Props) {
       </div>
     </div>
 
-    <div className="bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-sm overflow-x-auto transition-colors">
+    <div className="bg-[var(--card)] border border-[var(--border)] rounded-2xl shadow-sm overflow-hidden transition-colors">
+      <div className="overflow-x-auto">
         <table className="w-full text-left text-[12px] min-w-[800px]">
           <thead>
             <tr className="bg-[var(--bg)] border-b border-[var(--border)] text-[var(--text-muted)] font-bold uppercase tracking-widest transition-colors">
@@ -2932,8 +3086,48 @@ export default function Dashboard({ user, token, onLogout }: Props) {
           </tbody>
         </table>
       </div>
+      
+      {/* Modern, high-polished Table Pagination Footer */}
+      <div className="px-6 py-4 bg-[var(--bg)]/50 border-t border-[var(--border)] flex flex-col sm:flex-row items-center justify-between gap-4 transition-colors">
+        <div className="text-xs text-[var(--text-muted)] font-bold uppercase tracking-wider select-none">
+          Showing <span className="text-[var(--text-main)] font-black transition-colors">{(reportPage - 1) * 10 + 1}</span> to <span className="text-[var(--text-main)] font-black transition-colors">{Math.min(reportPage * 10, reportTotal)}</span> of <span className="text-[var(--text-main)] font-black transition-colors">{reportTotal}</span> Records
+        </div>
+        
+        <div className="flex items-center gap-1.5 bg-[var(--bg)] border border-[var(--border)] p-1 rounded-xl shadow-sm hover:border-blue-500/10 transition-colors">
+          <button
+            disabled={reportPage === 1 || reportsLoading}
+            onClick={() => {
+              setReportPage(prev => Math.max(1, prev - 1));
+              const el = document.getElementById('coop_type_filter_select');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className="p-1.5 bg-[var(--card)] border border-[var(--border)] rounded-lg text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-40 hover:bg-[var(--bg)] transition-all flex items-center gap-1 shadow-sm disabled:pointer-events-none"
+            title="Previous Page"
+          >
+             <ChevronLeft size={14} />
+             <span>Prev</span>
+          </button>
+          <div className="px-3 text-[10px] font-black text-[var(--text-muted)] uppercase tracking-wider select-none">
+            Page {reportPage} of {reportPages}
+          </div>
+          <button
+            disabled={reportPage === reportPages || reportsLoading}
+            onClick={() => {
+              setReportPage(prev => Math.min(reportPages, prev + 1));
+              const el = document.getElementById('coop_type_filter_select');
+              if (el) el.scrollIntoView({ behavior: 'smooth' });
+            }}
+            className="p-1.5 bg-[var(--card)] border border-[var(--border)] rounded-lg text-xs font-bold text-[var(--text-muted)] hover:text-[var(--text-main)] disabled:opacity-40 hover:bg-[var(--bg)] transition-all flex items-center gap-1 shadow-sm disabled:pointer-events-none"
+            title="Next Page"
+          >
+            <span>Next</span>
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      </div>
     </div>
-  );
+  </div>
+);
 
   const renderUsers = () => (
     <div className="space-y-6">
@@ -3226,6 +3420,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
           <SidebarItem icon={LayoutDashboard} label="Dashboard" id="dashboard" active={activeTab === 'dashboard'} />
           <SidebarItem icon={FileText} label="Report Repository" id="reports" active={activeTab === 'reports'} />
           <SidebarItem icon={Wrench} label="Report Builder" id="builder" active={activeTab === 'builder'} />
+          <SidebarItem icon={MapPin} label="Geographic Map" id="map" active={activeTab === 'map'} />
           {user?.role === UserRole.ADMIN && (
             <>
               <SidebarItem icon={Users} label="Operator Registry" id="users" active={activeTab === 'users'} />
@@ -3321,18 +3516,19 @@ export default function Dashboard({ user, token, onLogout }: Props) {
 
         {/* Global Notification Bell (Desktop) */}
         {!isMobileMenuOpen && (
-          <div className="hidden lg:block absolute top-6 right-6 lg:top-8 lg:right-12 z-50">
+          <div className="hidden lg:block fixed top-6 right-6 lg:top-8 lg:right-12 z-50">
             <div className="relative">
               <button 
                 onClick={() => {
                   setShowNotifications(!showNotifications);
                   if (!showNotifications) fetchNotifications();
                 }}
-                className="p-3 bg-[var(--card)] border border-[var(--border)] rounded-xl shadow-sm text-[var(--text-muted)] hover:text-blue-600 dark:hover:text-blue-400 transition-all hover:border-blue-200 dark:hover:border-blue-800 transition-colors"
+                className="p-3 bg-[var(--card)]/90 backdrop-blur-md border border-[var(--border)] rounded-2xl shadow-lg hover:shadow-xl text-[var(--text-muted)] hover:text-blue-600 dark:hover:text-blue-400 hover:scale-105 active:scale-95 transition-all hover:border-blue-500/20 dark:hover:border-blue-400/20"
+                title="System Notifications"
               >
                 <Bell size={20} />
                 {unreadNotifications > 0 && (
-                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-600 text-white text-[10px] font-bold rounded-full flex items-center justify-center border-2 border-[var(--card)] transition-colors">
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-600 border-2 border-[var(--card)] text-white text-[10px] font-bold rounded-full flex items-center justify-center shadow-md animate-pulse">
                     {unreadNotifications}
                   </span>
                 )}
@@ -3454,6 +3650,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
             {activeTab === 'dashboard' && renderDashboard()}
             {activeTab === 'reports' && renderReports()}
             {activeTab === 'builder' && renderBuilder()}
+            {activeTab === 'map' && <MapVisualizer user={user} token={token} />}
             {user?.role === UserRole.ADMIN && (
               <>
                 {activeTab === 'users' && renderUsers()}

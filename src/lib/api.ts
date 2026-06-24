@@ -6,7 +6,14 @@ export const apiRequest = async (url: string, options: RequestInit = {}) => {
     token = null;
   }
 
-  const baseUrl = import.meta.env.VITE_API_BASE_URL || '';
+  let baseUrl = '';
+  
+  // Ignore configured localhost API base URLs when previewed on a real external hostname
+  if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+    if (baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1')) {
+      baseUrl = '';
+    }
+  }
   
   // Ensure we don't double slash if url starts with /
   const fullUrl = url.startsWith('http') ? url : `${baseUrl.replace(/\/$/, '')}/${url.replace(/^\//, '')}`;
@@ -44,11 +51,27 @@ export const apiRequest = async (url: string, options: RequestInit = {}) => {
     }
 
     return response;
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof Error && error.message === 'Session expired') {
       throw error;
     }
-    console.error('API Request failure:', error);
+    
+    // Identify standard network/fetch exceptions (e.g., during dev server restarts or disconnects)
+    const isNetworkError = error instanceof TypeError || 
+                           (error && error.message && (
+                             error.message.toLowerCase().includes('failed to fetch') || 
+                             error.message.toLowerCase().includes('networkerror') ||
+                             error.message.toLowerCase().includes('load failed')
+                           ));
+
+    if (isNetworkError) {
+      console.warn(`📡 Network connection offline or server restarting for API endpoint: ${url}`);
+      if (error && typeof error === 'object') {
+        error.isNetworkError = true;
+      }
+    } else {
+      console.error('API Request failure:', error);
+    }
     throw error;
   }
 };

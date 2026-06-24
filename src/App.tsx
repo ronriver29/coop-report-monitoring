@@ -33,7 +33,7 @@ export default function App() {
         window.history.replaceState({}, document.title, cleanUrl);
       }, 500);
     }
-
+    
     // Handle message from popup
     const handleMessage = (event: MessageEvent) => {
       // Validate origin is from AI Studio preview, localhost, or GitHub Pages
@@ -43,8 +43,8 @@ export default function App() {
       }
 
       if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-        const { token, user } = event.data;
-        handleLoginSuccess(token, user);
+        const { token: popupToken, user: popupUser } = event.data;
+        handleLoginSuccess(popupToken, popupUser);
       }
     };
 
@@ -68,8 +68,10 @@ export default function App() {
             // Token invalid or expired
             handleLogout();
           }
-        } catch (err) {
-          console.error('Failed to fetch user profile:', err);
+        } catch (err: any) {
+          if (err && !err.isNetworkError) {
+            console.error('Failed to fetch user profile:', err);
+          }
         }
       }
     };

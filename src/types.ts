@@ -31,6 +31,8 @@ export interface Report {
 
 export interface DashboardStats {
   totalReports: number;
+  complianceRating?: string;
+  totalAssetsValue?: number;
   statusDistribution: { _id: string; count: number }[];
   regionDistribution: { _id: string; count: number }[];
   provinceDistribution?: { _id: string; count: number }[];

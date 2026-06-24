@@ -10,8 +10,7 @@ import session from 'express-session';
 import swaggerJsdoc from 'swagger-jsdoc';
 import swaggerUi from 'swagger-ui-express';
 import dotenv from 'dotenv';
-
-dotenv.config();
+dotenv.config({ override: true, path: path.resolve(process.cwd(), '.env') });
 
 import { createServer as createViteServer } from 'vite';
 import { connectDB } from './src/config/db.ts';
@@ -25,6 +24,7 @@ import reportRoutes from './src/routes/reportRoutes.ts';
 import dashboardRoutes from './src/routes/dashboardRoutes.ts';
 import auditRoutes from './src/routes/auditRoutes.ts';
 import settingsRoutes from './src/routes/settingsRoutes.ts';
+import geminiRoutes from './src/routes/geminiRoutes.ts';
 
 const _filename = typeof import.meta?.url !== 'undefined' ? fileURLToPath(import.meta.url) : (typeof __filename !== 'undefined' ? __filename : '');
 const _dirname = typeof import.meta?.url !== 'undefined' ? path.dirname(_filename) : (typeof __dirname !== 'undefined' ? __dirname : process.cwd());
@@ -102,12 +102,43 @@ app.get('/api', (req, res) => {
   res.json({ title: 'CDA Cooperative Monitoring API', status: 'operational' });
 });
 
+// Database Readiness Check Middleware
+app.use('/api', (req, res, next) => {
+  import('mongoose').then((mongoose) => {
+    if (mongoose.default.connection.readyState !== 1) {
+      return res.status(503).json({ 
+        message: 'The database is currently starting up or unavailable. Please try again in a few moments.' 
+      });
+    }
+    next();
+  }).catch(next);
+});
+
 // Swagger
 const swaggerOptions = {
   definition: {
     openapi: '3.0.0',
-    info: { title: 'CDA Cooperative Monitoring API', version: '1.0.0' },
-    servers: [{ url: '/api' }],
+    info: { 
+      title: 'CDA Cooperative Monitoring API', 
+      version: '1.0.0',
+      description: 'API documentation for the Cooperative Report Monitoring Application, featuring personnel auditing, CSV report ingestion, and compliance tracking.'
+    },
+    servers: [
+      { 
+        url: '/', 
+        description: 'Default Server' 
+      }
+    ],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: 'http',
+          scheme: 'bearer',
+          bearerFormat: 'JWT',
+          description: 'Enter your JWT token in the format "Bearer <token>"'
+        }
+      }
+    }
   },
   apis: ['./src/routes/*.{ts,js}', './src/routes/*.ts'],
 };
@@ -125,6 +156,7 @@ app.use('/api/reports', reportRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/audit', auditRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/gemini', geminiRoutes);
 
 // Shared Notifications
 app.get('/api/notifications', protect, async (req: any, res) => {
@@ -185,7 +217,11 @@ async function initFrontend() {
 
 // Global Bootstrap
 async function bootstrap() {
-  await connectDB();
+  // Connect to DB asynchronously without blocking server start
+  connectDB().catch(err => {
+    console.error('⚠️ Database connection failed on bootstrap. The server will start, but DB features will be unavailable or encounter errors until a connection is established.', err.message || err);
+  });
+  
   await initFrontend();
   
   app.listen(PORT, '0.0.0.0', () => {

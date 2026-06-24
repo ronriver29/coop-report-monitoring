@@ -16,11 +16,14 @@ passport.use(
     },
     async (accessToken, refreshToken, profile, done) => {
       try {
-        const email = profile.emails?.[0].value;
+        let email = profile.emails?.[0].value;
         
         if (!email) {
           return done(new Error('No email found in Google profile'), undefined);
         }
+
+        // Normalize email to remove accidental double-dots or spaces
+        email = email.trim().toLowerCase().replace(/\.\.+/g, '.');
 
         // --- DOMAIN WALL ---
         if (!email.endsWith('@cda.gov.ph') && email !== 'ronrivera29@gmail.com') { // Included user email for testing

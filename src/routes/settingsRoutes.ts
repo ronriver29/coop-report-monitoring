@@ -9,28 +9,174 @@ import { getEmailStatus, verifyEmailConfig } from '../services/emailService.ts';
 
 const router = express.Router();
 
-// Get email service status (restricted to ADMIN)
+/**
+ * @swagger
+ * /api/settings/email-status:
+ *   get:
+ *     summary: Get email service status (Admin Only)
+ *     description: Checks whether SMTP is successfully configured and active, returning connection health metrics.
+ *     tags: [Settings]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Connection status response
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden (Admin only)
+ *       500:
+ *         description: Verification check failed
+ */
 router.get('/email-status', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
   try {
-    const status = getEmailStatus();
+    const status = await getEmailStatus();
     res.json(status);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching email status' });
   }
 });
 
-// Trigger a re-verification (restricted to ADMIN)
+/**
+ * @swagger
+ * /api/settings/email-verify:
+ *   post:
+ *     summary: Trigger an SMTP connection re-verification (Admin Only)
+ *     description: Pings the configured SMTP host using active credentials to test and confirm immediate status delivery.
+ *     tags: [Settings]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Dynamic status verification result
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden
+ *       500:
+ *         description: Verification error
+ */
 router.post('/email-verify', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
   try {
     const success = await verifyEmailConfig();
-    const status = getEmailStatus();
+    const status = await getEmailStatus();
     res.json({ success, status });
   } catch (error) {
     res.status(500).json({ message: 'Error verifying email' });
   }
 });
 
-// Get all settings (restricted to ADMIN)
+/**
+ * @swagger
+ * /api/settings/smtp:
+ *   post:
+ *     summary: Update or create SMTP settings (Admin Only)
+ *     description: Stores SMTP configurations such as Host, Port, secure protocol flag, username, and password in settings.
+ *     tags: [Settings]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               host:
+ *                 type: string
+ *               port:
+ *                 type: string
+ *               user:
+ *                 type: string
+ *               pass:
+ *                 type: string
+ *               from:
+ *                 type: string
+ *               secure:
+ *                 type: string
+ *               service:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Configuration updated and re-verified successfully
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden
+ *       500:
+ *         description: Invalid parameters or configuration error
+ */
+router.post('/smtp', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
+  try {
+    const { host, port, user, pass, from } = req.body;
+
+    const updates = [
+      { key: 'EMAIL_HOST', value: host || '', category: SettingCategory.NOTIFICATIONS, description: 'SMTP Host Server' },
+      { key: 'EMAIL_PORT', value: port || '587', category: SettingCategory.NOTIFICATIONS, description: 'SMTP Port Number' },
+      { key: 'EMAIL_USER', value: user || '', category: SettingCategory.NOTIFICATIONS, description: 'SMTP Username/Email address' },
+      { key: 'EMAIL_FROM', value: from || '', category: SettingCategory.NOTIFICATIONS, description: 'SMTP Sender Email' },
+    ];
+
+    // If password is not provided or is masked '••••••••', don't update it!
+    if (pass && pass !== '••••••••' && pass.trim() !== '') {
+      updates.push({
+        key: 'EMAIL_PASS',
+        value: pass,
+        category: SettingCategory.NOTIFICATIONS,
+        description: 'SMTP Password'
+      });
+    }
+
+    for (const item of updates) {
+      await Settings.findOneAndUpdate(
+        { key: item.key },
+        {
+          value: item.value,
+          category: item.category,
+          description: item.description,
+          updatedBy: req.user!._id
+        },
+        { upsert: true, new: true }
+      );
+    }
+
+    await logAction(
+      req.user!._id.toString(),
+      'SYSTEM_SETTING_UPDATED',
+      'Updated system SMTP settings from Dashboard',
+      'SYSTEM'
+    );
+
+    // Dynamic verification immediately
+    const success = await verifyEmailConfig();
+    const status = await getEmailStatus();
+
+    res.json({ success, status });
+  } catch (error: any) {
+    console.error('Update SMTP settings error:', error);
+    res.status(500).json({ message: 'Server error updating SMTP settings', error: error.message });
+  }
+});
+
+/**
+ * @swagger
+ * /api/settings:
+ *   get:
+ *     summary: Get all settings (Admin Only)
+ *     description: Returns a comprehensive list of all system-wide environment variables and configurations.
+ *     tags: [Settings]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Array of system configurations
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden
+ *       500:
+ *         description: Server retrieve error
+ */
 router.get('/', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
   try {
     const settings = await Settings.find().sort({ category: 1, key: 1 });
@@ -41,7 +187,45 @@ router.get('/', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, re
   }
 });
 
-// Update or create a setting (restricted to ADMIN)
+/**
+ * @swagger
+ * /api/settings:
+ *   post:
+ *     summary: Update or create a custom setting (Admin Only)
+ *     description: Saves a specific environment setting category and value in the database cache.
+ *     tags: [Settings]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - key
+ *               - value
+ *             properties:
+ *               key:
+ *                 type: string
+ *               value:
+ *                 type: string
+ *               category:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Setting updated successfully
+ *       400:
+ *         description: Missing key or value
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden
+ *       500:
+ *         description: Update failure
+ */
 router.post('/', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
   try {
     const { key, value, category, description } = req.body;
@@ -76,7 +260,25 @@ router.post('/', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, r
   }
 });
 
-// Initialize default settings if they don't exist
+/**
+ * @swagger
+ * /api/settings/init:
+ *   post:
+ *     summary: Initialize default settings if they do not exist (Admin Only)
+ *     description: Resets or seeds basic settings like APP_NAME, MAINTENANCE_MODE, allow user registration, and notification flags.
+ *     tags: [Settings]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Default configurations successfully seeded
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden
+ *       500:
+ *         description: Seeding error
+ */
 router.post('/init', protect, restrictTo(UserRole.ADMIN), async (req: AuthRequest, res) => {
   try {
     const defaults = [
