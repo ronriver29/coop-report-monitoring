@@ -727,8 +727,13 @@ router.patch('/users/:id', protect, restrictTo(UserRole.ADMIN), async (req: any,
  *       500:
  *         description: Server error deleting user
  */
-router.delete('/users/:id', protect, restrictTo(UserRole.ADMIN), async (req: any, res) => {
-  const { id } = req.params;
+router.delete(['/users/:id', '/users'], protect, restrictTo(UserRole.ADMIN), async (req: any, res) => {
+  const id = req.params.id || req.body.id || req.query.id;
+  
+  if (!id) {
+    return res.status(400).json({ message: 'User ID is required' });
+  }
+
   console.log(`[DELETE USER] Attempting to delete user with ID: ${id}`);
 
   try {

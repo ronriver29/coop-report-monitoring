@@ -372,10 +372,16 @@ export default function Dashboard({ user, token, onLogout }: Props) {
   };
 
   const handleDeleteUser = async (id: string) => {
+    if (!id || id === 'undefined') {
+       setUploadMessage({ type: 'error', text: 'Error: User ID is missing' });
+       return;
+    }
     setUserActionLoading(true);
     try {
       const res = await apiRequest(`/api/auth/users/${id}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id })
       });
       
       const data = await res.json();
