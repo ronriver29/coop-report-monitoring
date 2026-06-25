@@ -701,6 +701,69 @@ router.patch('/users/:id', protect, restrictTo(UserRole.ADMIN), async (req: any,
 
 /**
  * @swagger
+ * /api/auth/users/{id}:
+ *   delete:
+ *     summary: Delete a user
+ *     description: Permanently deletes a user from the system. Requires ADMIN role.
+ *     tags: [Auth]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     responses:
+ *       200:
+ *         description: User deleted successfully
+ *       401:
+ *         description: Unauthenticated
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: User not found
+ *       500:
+ *         description: Server error deleting user
+ */
+router.delete('/users/:id', protect, restrictTo(UserRole.ADMIN), async (req: any, res) => {
+  const { id } = req.params;
+  console.log(`[DELETE USER] Attempting to delete user with ID: ${id}`);
+
+  try {
+    const user = await User.findById(id);
+    if (!user) {
+      console.log(`[DELETE USER] User not found: ${id}`);
+      return res.status(404).json({ message: 'User not found' });
+    }
+
+    if (user.role === UserRole.ADMIN && user.email === 'admin@cda.gov.ph') {
+      console.log(`[DELETE USER] Cannot delete master admin`);
+      return res.status(403).json({ message: 'Cannot delete the master admin account' });
+    }
+
+    await User.findByIdAndDelete(id);
+    console.log(`[DELETE USER] Successfully deleted user: ${id}`);
+
+    // Log the deletion
+    await logAction(
+      req.user._id.toString(),
+      'USER_DELETED',
+      `Personnel ${user.email} was permanently deleted`,
+      'USER',
+      id
+    );
+
+    res.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error(`[DELETE USER] Error deleting user:`, error);
+    res.status(500).json({ message: 'Failed to delete user' });
+  }
+});
+
+/**
+ * @swagger
  * /api/auth/change-password:
  *   post:
  *     summary: Change user password

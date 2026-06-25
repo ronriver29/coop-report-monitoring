@@ -3807,7 +3807,7 @@ export default function Dashboard({ user, token, onLogout }: Props) {
               Cancel
             </button>
             <button 
-              onClick={() => handleDeleteUser(confirmDelete._id)}
+              onClick={() => handleDeleteUser(confirmDelete._id || confirmDelete.id as string)}
               disabled={userActionLoading}
               className="flex-1 bg-red-600 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-lg shadow-red-600/20 flex items-center justify-center gap-2"
             >
