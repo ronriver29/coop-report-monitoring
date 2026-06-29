@@ -28,7 +28,7 @@ export const apiRequest = async (url: string, options: RequestInit = {}) => {
 
     if (response.status === 401) {
       // Don't redirect if we're already on the login page or trying to login
-      const isAuthPath = url.includes('/api/auth/login') || url.includes('/api/auth/google');
+      const isAuthPath = url.includes('/api/auth/login') || url.includes('/api/auth/authentik') || url.includes('/api/auth/google');
       if (!isAuthPath) {
         console.warn(`Unauthorized access to ${url}, redirecting to login...`);
         // Clear credentials and reload to force login redirect

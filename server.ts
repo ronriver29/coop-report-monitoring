@@ -5,7 +5,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import rateLimit from 'express-rate-limit';
-import passport from 'passport';
+
 import session from 'express-session';
 import swaggerJsdoc from 'swagger-jsdoc';
 import swaggerUi from 'swagger-ui-express';
@@ -14,7 +14,7 @@ dotenv.config({ override: true, path: path.resolve(process.cwd(), '.env') });
 
 import { createServer as createViteServer } from 'vite';
 import { connectDB } from './src/config/db.ts';
-import './src/config/passport.ts';
+
 import { protect } from './src/middleware/auth.ts';
 import { verifyEmailConfig } from './src/services/emailService.ts';
 
@@ -93,9 +93,7 @@ const authLimiter = rateLimit({
 app.use('/api/auth/login', authLimiter);
 app.use('/api/auth/register', authLimiter);
 
-// Passport
-app.use(passport.initialize());
-app.use(passport.session());
+
 
 // API Root Info
 app.get('/api', (req, res) => {
